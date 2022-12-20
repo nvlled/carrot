@@ -29,7 +29,7 @@ func TestBlocking(t *testing.T) {
 	msPerLoop := 10
 	numToTurn := 12
 
-	in := carrot.Start(func(in carrot.Insect) {
+	in := carrot.Start(func(in carrot.Invoker) {
 		for i := 0; i < numToTurn; i++ {
 			// will wait 10ms before continuing
 			in.Yield()
@@ -68,7 +68,7 @@ func TestQueue(t *testing.T) {
 	mainID := goroutineID()
 
 	numInvoke := 0
-	runner := carrot.Start(func(in carrot.Insect) {
+	runner := carrot.Start(func(in carrot.Invoker) {
 		outerID := goroutineID()
 		if mainID == outerID {
 			t.Errorf("it's broke: main=%v, outerID=%v\n", mainID, outerID)
@@ -106,21 +106,21 @@ func TestStartAsync1(t *testing.T) {
 	counter := atomic.Int32{}
 	sum := atomic.Int32{}
 
-	adder := func(in carrot.Insect) {
+	adder := func(in carrot.Invoker) {
 		for i := 0; i < 30; i++ {
 			in.Yield()
 			sum.Add(int32(i))
 		}
 	}
 
-	loopCounter := func(in carrot.Insect, n int) {
+	loopCounter := func(in carrot.Invoker, n int) {
 		for i := 0; i < n; i++ {
 			in.Yield()
 			counter.Add(1)
 		}
 	}
 
-	runner := carrot.Start(func(in carrot.Insect) {
+	runner := carrot.Start(func(in carrot.Invoker) {
 		// asynchronous, will proceed immediately
 		// without waiting for them to finish
 		task1 := carrot.StartAsyncA(in, loopCounter, 10)
@@ -147,9 +147,9 @@ func TestStartAsync1(t *testing.T) {
 		// synchronously
 		loopCounter(in, 50)
 
-		// Cancel all insects, no effect if they are already done.
-		// Note: cancelling the main insects will
-		// cancel all insects created in this coroutine.
+		// Cancel all invokers, no effect if they are already done.
+		// Note: cancelling the main invoker will
+		// cancel all invokers created in this coroutine.
 		in.Cancel()
 	})
 
@@ -167,17 +167,17 @@ func TestStartAsync1(t *testing.T) {
 }
 
 func TestStartAsync2(t *testing.T) {
-	coroutine := func(in carrot.Insect) {
+	coroutine := func(in carrot.Invoker) {
 		for i := 0; i < 10; i++ {
 			in.Yield()
 		}
 	}
-	coroutineWithArg := func(in carrot.Insect, n int) {
+	coroutineWithArg := func(in carrot.Invoker, n int) {
 		for i := 0; i < n; i++ {
 			in.Yield()
 		}
 	}
-	coroutineWithResult := func(in carrot.Insect) int {
+	coroutineWithResult := func(in carrot.Invoker) int {
 		sum := 0
 		for i := 0; i < 20; i++ {
 			sum += i
@@ -186,7 +186,7 @@ func TestStartAsync2(t *testing.T) {
 		return sum
 	}
 
-	coroutineWithArgsResult := func(in carrot.Insect, n int) int {
+	coroutineWithArgsResult := func(in carrot.Invoker, n int) int {
 		sum := 0
 		for i := 0; i < n; i++ {
 			sum += i
@@ -195,7 +195,7 @@ func TestStartAsync2(t *testing.T) {
 		return sum
 	}
 
-	runner := carrot.Start(func(in carrot.Insect) {
+	runner := carrot.Start(func(in carrot.Invoker) {
 		// run coroutines synchronously, one by one
 		coroutine(in)
 		coroutineWithArg(in, 20)
@@ -227,13 +227,13 @@ func TestStartAsync2(t *testing.T) {
 }
 
 func TestStartAsyncWithResult(t *testing.T) {
-	doSomething := func(in carrot.Insect, n int) carrot.Void {
+	doSomething := func(in carrot.Invoker, n int) carrot.Void {
 		for i := 0; i < n; i++ {
 			in.Yield()
 		}
 		return carrot.None
 	}
-	computeResult := func(in carrot.Insect, n int) int {
+	computeResult := func(in carrot.Invoker, n int) int {
 		sum := 0
 		for i := 0; i < n; i++ {
 			sum += i
@@ -242,7 +242,7 @@ func TestStartAsyncWithResult(t *testing.T) {
 		return sum
 	}
 
-	runner := carrot.Start(func(in carrot.Insect) {
+	runner := carrot.Start(func(in carrot.Invoker) {
 		task1 := carrot.StartAsyncAR(in, computeResult, 10)
 		task2 := carrot.StartAsyncAR(in, computeResult, 20)
 		task3 := carrot.StartAsyncAR(in, doSomething, 30)
@@ -268,9 +268,9 @@ func TestDelays(t *testing.T) {
 	x := 0
 	expectedMs := 0
 	notCancelled := false
-	runner := carrot.Start(func(in carrot.Insect) {
+	runner := carrot.Start(func(in carrot.Invoker) {
 		for i := 0; i < 100; i++ {
-			in.StartAsync(func(in carrot.Insect) {
+			in.StartAsync(func(in carrot.Invoker) {
 				in.Delay((i + 1) * 10000)
 			})
 		}
@@ -293,7 +293,7 @@ func TestDelays(t *testing.T) {
 
 		in.DelayAsync(1000000).Cancel()
 
-		task := carrot.StartAsync(in, func(in carrot.Insect) {
+		task := carrot.StartAsync(in, func(in carrot.Invoker) {
 			in.DelayAsync(1000000).Await()
 			x++
 		})
@@ -332,9 +332,9 @@ func TestCancelSubCoroutines(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			runner := carrot.Start(func(in carrot.Insect) {
-				in.StartAsync(func(in carrot.Insect) {
-					in.StartAsync(func(in carrot.Insect) {
+			runner := carrot.Start(func(in carrot.Invoker) {
+				in.StartAsync(func(in carrot.Invoker) {
+					in.StartAsync(func(in carrot.Invoker) {
 						in.Sleep(5000 * time.Millisecond)
 						t.Error("should not be called")
 					}).Await()
@@ -355,13 +355,13 @@ func TestCancelSubCoroutines(t *testing.T) {
 }
 
 func TestEndSubroutine(t *testing.T) {
-	runner := carrot.Start(func(in carrot.Insect) {
-		task1 := in.StartAsync(func(in carrot.Insect) {
+	runner := carrot.Start(func(in carrot.Invoker) {
+		task1 := in.StartAsync(func(in carrot.Invoker) {
 			for i := 0; i < 10; i++ {
 				in.Yield()
 			}
 		})
-		task2 := in.StartAsync(func(in carrot.Insect) {
+		task2 := in.StartAsync(func(in carrot.Invoker) {
 			for i := 0; i < 10; i++ {
 				in.Yield()
 			}

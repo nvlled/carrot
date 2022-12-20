@@ -14,12 +14,10 @@ Took some inspiration from https://github.com/wraikny/AwaitableCoroutine.
 
 ## Definitions
 
-`Coroutine` - a function that takes an `Insect`
+`Coroutine` - a function that takes an `Invoker`
 
-`Insect` - an object used to control the coroutine, with operations
-such yielding or cancelling. It is left to imagination what insect means here,
-it could stand for Interfaced Expressed Commands Terminal, or
-it means more bugs for your code.
+`Invoker` - an object used to control the coroutine, with operations
+such yielding or cancelling.
 
 `Script` - an instance of several coroutines running
 
@@ -43,7 +41,7 @@ A working example program can be found [here:TODO](#TODO).
 
 ```go
 count := 0
-script := carrot.Start(func(in carrot.Insect) {
+script := carrot.Start(func(in carrot.Invoker) {
     println("Started!")
     for i := 0; i < 10; i++ {
         in.Yield()
@@ -60,15 +58,15 @@ for !script.IsDone() {
 ### Other example
 
 ```go
-func subCoroutine0(in carrot.Insect) { /* ... */ }
-func subCoroutine1(in carrot.Insect) int { /* ... */ }
-func subCoroutine2(in carrot.Insect) string { /* ... */ }
-func subCoroutine3(in carrot.Insect x int) string {
+func subCoroutine0(in carrot.Invoker) { /* ... */ }
+func subCoroutine1(in carrot.Invoker) int { /* ... */ }
+func subCoroutine2(in carrot.Invoker) string { /* ... */ }
+func subCoroutine3(in carrot.Invoker x int) string {
     subCoroutine2(in)
     // ...
 }
 
-func mainCoroutine(in carrot.Insect) {
+func mainCoroutine(in carrot.Invoker) {
     n := subCoroutine1(in)
     str := subCoroutine2(in)
     _, anInt, aStr, aStr2 := carrot.Await4(

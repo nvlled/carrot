@@ -11,12 +11,12 @@ import (
 // No need to explicitly handle and recover from
 // this error inside a coroutine.
 //
-// Note: if insect methods are called an another thread outside a coroutine,
+// Note: if invoker methods are called an another thread outside a coroutine,
 // then this error needs to be handled. You may use the helper function:
 //
 //	...
 //	defer CatchCancelled()
-//	insect.Yield()
+//	invoker.Yield()
 var ErrCancelled = quest.ErrCancelled
 
 type Void = quest.Void

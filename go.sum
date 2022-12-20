@@ -1,4 +1,8 @@
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
+github.com/nvlled/mud v0.2.0 h1:7PBnh9QuRbhS1bkFvH0CASVl0pcbHwNeJGGSWjC13OI=
+github.com/nvlled/mud v0.2.0/go.mod h1:ZhF6wEnilrnb4bDpNGxbjWrbSwpMIkxMNdD2pf/3hYA=
+github.com/nvlled/quest v0.6.0 h1:yfpgBpTbgTjpVgJ2GaYYtTzaXOOaVbRugMi1bwcAgv0=
+github.com/nvlled/quest v0.6.0/go.mod h1:8iCCw2oMM5t4hv6x5bpS9HETcwOCiAjSecEcHmaxADs=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/stretchr/testify v1.8.1 h1:w7B6lhMri9wdJUVmEZPGGhZzrYTPvgJArz7wNPgYKsk=
 golang.org/x/exp v0.0.0-20221217163422-3c43f8badb15 h1:5oN1Pz/eDhCpbMbLstvIPa0b/BEQo6g6nwV3pLjfM6w=

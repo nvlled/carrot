@@ -9,19 +9,19 @@ import (
 )
 
 // A Coroutine is function that only takes a In argument.
-type Coroutine = func(Insect)
+type Coroutine = func(Invoker)
 
 // A Coroutine that takes one additional argument.
-type CoroutineA[Arg any] func(Insect, Arg)
+type CoroutineA[Arg any] func(Invoker, Arg)
 
 // A Coroutine that returns one result.
-type CoroutineR[Result any] func(Insect) Result
+type CoroutineR[Result any] func(Invoker) Result
 
 // A Coroutine that both takes one additional argument
 // and returns one result.
-type CoroutineAR[Arg any, Result any] func(Insect, Arg) Result
+type CoroutineAR[Arg any, Result any] func(Invoker, Arg) Result
 
-// An Insect is used to direct the program flow of a coroutine.
+// An Invoker is used to direct the program flow of a coroutine.
 //
 // Note: Methods may block for one or more several frames,
 // except for those labeled with Async.
@@ -31,12 +31,12 @@ type CoroutineAR[Arg any, Result any] func(Insect, Arg) Result
 // Note: Blocking methods should be called from a coroutine, directly
 // or indirectly. Blocking methods will panic() with a ErrCancelled,
 // and coroutines will automatically catch this.
-type Insect interface {
-	// Create a new Insect, for purposes of starting
+type Invoker interface {
+	// Create a new invoker, for purposes of starting
 	// a new sub coroutine. Use only for a custom
 	// coroutine coordination. It is recommended to use StartAsync
 	// instead.
-	Create() Insect
+	Create() Invoker
 
 	// RunOnUpdate invokes fn in the same thread as Update().
 	// Useful when calling functions that are only useable in the main thread.
@@ -44,7 +44,7 @@ type Insect interface {
 	//
 	// Note: Avoid doing long-running synchronous operations inside fn.
 	//
-	// Note: Avoid calling Insect methods inside fn, particularly the ones that panic.
+	// Note: Avoid calling Invoker methods inside fn, particularly the ones that panic.
 	RunOnUpdate(fn func())
 
 	// Yield waits until the next call to Update().
@@ -81,24 +81,24 @@ type Insect interface {
 	// in the background, or you need to run several coroutines
 	// at the same time.
 	// Otherwise, you can just call another coroutine normally as a function.
-	// Similar to the other function StartAsync(insect, coroutine)
+	// Similar to the other function StartAsync(in, coroutine)
 	//
 	// Example:
-	//  insect.StartAsync(func(insect Insect) { ... })
+	//  in.StartAsync(func(in Invoker) { ... })
 	//
-	// Note: the argument insect is a new and different insect.
-	// Use the same insect name "in" in any coroutine, to
-	// avoid accidentally using the parent insects.
+	// Note: the argument in is a new and different in.
+	// Use the same in name "in" in any coroutine, to
+	// avoid accidentally using the parent ins.
 	StartAsync(coroutine Coroutine) PlainTask[Void]
 }
 
-type insectoid struct {
-	// ID of coroutine insect. Mainly used for debugging.
+type invoker struct {
+	// ID of coroutine in. Mainly used for debugging.
 	ID int64
 
 	updateTask voidTask
 
-	subInsects *sliceSet[*insectoid]
+	subInvokers *sliceSet[*invoker]
 
 	queued   action
 	canceled bool
@@ -106,117 +106,117 @@ type insectoid struct {
 
 var idGen = atomic.Int64{}
 
-func newInsect() *insectoid {
-	return &insectoid{
-		ID:         idGen.Add(1),
-		updateTask: quest.NewVoidTask(),
-		subInsects: newSliceSet[*insectoid](),
+func newInvoker() *invoker {
+	return &invoker{
+		ID:          idGen.Add(1),
+		updateTask:  quest.NewVoidTask(),
+		subInvokers: newSliceSet[*invoker](),
 	}
 }
 
-func (insect *insectoid) Create() Insect {
-	return insect.create()
+func (in *invoker) Create() Invoker {
+	return in.create()
 }
 
-func (insect *insectoid) create() *insectoid {
-	subInsect := spawnInsectoid()
-	subInsect.reset()
-	insect.subInsects.Add(subInsect)
-	return subInsect
+func (in *invoker) create() *invoker {
+	subInvoker := summonInvoker()
+	subInvoker.reset()
+	in.subInvokers.Add(subInvoker)
+	return subInvoker
 }
 
-func (insect *insectoid) RunOnUpdate(fn func()) {
-	if insect.canceled {
+func (in *invoker) RunOnUpdate(fn func()) {
+	if in.canceled {
 		return
 	}
-	insect.queued = fn
-	insect.tryTerminate(insect.updateTask.AwaitAndReset())
+	in.queued = fn
+	in.tryTerminate(in.updateTask.AwaitAndReset())
 }
 
-func (insect *insectoid) Yield() {
-	insect.tryTerminate(insect.updateTask.AwaitAndReset())
+func (in *invoker) Yield() {
+	in.tryTerminate(in.updateTask.AwaitAndReset())
 }
 
-func (insect *insectoid) Delay(count int) {
+func (in *invoker) Delay(count int) {
 	for i := 0; i < count; i++ {
-		insect.Yield()
+		in.Yield()
 	}
 }
 
-func (insect *insectoid) DelayAsync(count int) PlainTask[Void] {
-	return StartAsync(insect, func(insect Insect) {
+func (in *invoker) DelayAsync(count int) PlainTask[Void] {
+	return StartAsync(in, func(in Invoker) {
 		for i := 0; i < count; i++ {
-			insect.Yield()
+			in.Yield()
 		}
 	})
 }
 
-func (insect *insectoid) Sleep(t time.Duration) {
-	insect.SleepAsync(t).Await()
+func (in *invoker) Sleep(t time.Duration) {
+	in.SleepAsync(t).Await()
 }
 
-func (insect *insectoid) SleepAsync(t time.Duration) PlainTask[Void] {
-	return StartAsync(insect, func(Insect) {
+func (in *invoker) SleepAsync(t time.Duration) PlainTask[Void] {
+	return StartAsync(in, func(Invoker) {
 		time.Sleep(t)
 	})
 }
 
-func (insect *insectoid) update() {
-	if insect.canceled {
+func (in *invoker) update() {
+	if in.canceled {
 		return
 	}
 
-	if insect.queued != nil {
-		insect.queued()
-		insect.queued = nil
+	if in.queued != nil {
+		in.queued()
+		in.queued = nil
 	}
 
-	insect.updateTask.Resolve(None)
+	in.updateTask.Resolve(None)
 
-	insect.subInsects.Each(func(sub *insectoid) {
+	in.subInvokers.Each(func(sub *invoker) {
 		sub.update()
 	})
 }
 
-func (insect *insectoid) IsCanceled() bool {
-	return insect.canceled
+func (in *invoker) IsCanceled() bool {
+	return in.canceled
 }
 
-func (insect *insectoid) Cancel() {
-	if insect.canceled {
+func (in *invoker) Cancel() {
+	if in.canceled {
 		return
 	}
-	insect.canceled = true
-	insect.queued = nil
+	in.canceled = true
+	in.queued = nil
 
-	insect.subInsects.Each(func(sub *insectoid) {
+	in.subInvokers.Each(func(sub *invoker) {
 		sub.Cancel()
 	})
-	insect.subInsects.Clear()
+	in.subInvokers.Clear()
 
-	insect.updateTask.Cancel()
+	in.updateTask.Cancel()
 }
 
-func (insect *insectoid) reset() {
-	insect.queued = nil
-	insect.canceled = false
-	insect.subInsects.Clear()
-	insect.updateTask.Reset()
-	insect.updateTask.SetPanic(true)
+func (in *invoker) reset() {
+	in.queued = nil
+	in.canceled = false
+	in.subInvokers.Clear()
+	in.updateTask.Reset()
+	in.updateTask.SetPanic(true)
 }
 
-// See docs on the interface Insect.StartAsync
-func (insect *insectoid) StartAsync(coroutine Coroutine) PlainTask[Void] {
-	return StartAsync(insect, coroutine)
+// See docs on the interface Invoker.StartAsync
+func (in *invoker) StartAsync(coroutine Coroutine) PlainTask[Void] {
+	return StartAsync(in, coroutine)
 }
 
-// Similar to insect.StartAsync(coroutine)
+// Similar to in.StartAsync(coroutine)
 func StartAsync(
-	insect Insect,
+	in Invoker,
 	coroutine Coroutine,
 ) PlainTask[Void] {
-	return StartAsyncAR(insect, func(insect Insect, _ Void) Void {
-		coroutine(insect)
+	return StartAsyncAR(in, func(in Invoker, _ Void) Void {
+		coroutine(in)
 		return None
 	}, None)
 }
@@ -224,14 +224,14 @@ func StartAsync(
 // Similar to StartAsync, but the coroutine takes on addition argument.
 // Example:
 //
-//	StartAsyncA(insect, func(insect Insect, arg int) { ... })
+//	StartAsyncA(in, func(in Invoker, arg int) { ... })
 func StartAsyncA[Arg any](
-	insect Insect,
+	in Invoker,
 	coroutine CoroutineA[Arg],
 	arg Arg,
 ) PlainTask[Void] {
-	return StartAsyncAR(insect, func(insect Insect, arg Arg) Void {
-		coroutine(insect, arg)
+	return StartAsyncAR(in, func(in Invoker, arg Arg) Void {
+		coroutine(in, arg)
 		return None
 	}, arg)
 }
@@ -239,13 +239,13 @@ func StartAsyncA[Arg any](
 // Similar to StartAsync, but the coroutine returns one result.
 // Example:
 //
-//	StartAsyncA(insect, func(insect Insect) int { ... })
+//	StartAsyncA(in, func(in Invoker) int { ... })
 func StartAsyncR[Result any](
-	insect Insect,
+	in Invoker,
 	coroutine CoroutineR[Result],
 ) PlainTask[Result] {
-	return StartAsyncAR(insect, func(insect Insect, _ Void) Result {
-		return coroutine(insect)
+	return StartAsyncAR(in, func(in Invoker, _ Void) Result {
+		return coroutine(in)
 	}, None)
 }
 
@@ -253,19 +253,19 @@ func StartAsyncR[Result any](
 // additional argument and returns one result.
 // Example:
 //
-//	StartAsyncA(insect, func(insect Insect, arg string) int { ... })
-//	StartAsyncA(insect, func(insect Insect, arg float32) string { ... })
-//	StartAsyncA(insect, func(insect Insect, arg int) Unit { ... })
+//	StartAsyncA(in, func(in Invoker, arg string) int { ... })
+//	StartAsyncA(in, func(in Invoker, arg float32) string { ... })
+//	StartAsyncA(in, func(in Invoker, arg int) Unit { ... })
 //
 // Note: if you are going to use Void in either Arg or Result,
 // consider using the other variations of StartAsync.
 func StartAsyncAR[Arg any, Result any](
-	in Insect,
+	in Invoker,
 	coroutine CoroutineAR[Arg, Result],
 	arg Arg,
 ) PlainTask[Result] {
-	insect := in.(*insectoid)
-	subInsect := insect.create()
+	self := in.(*invoker)
+	subInvoker := self.create()
 
 	completion := quest.AllocTask[Void]()
 	blocker := quest.AllocTask[Result]()
@@ -275,18 +275,18 @@ func StartAsyncAR[Arg any, Result any](
 		// ensure coroutine is done before cleaning up
 		completion.Anticipate()
 		if _, ok := blocker.Anticipate(); !ok {
-			subInsect.Cancel()
+			subInvoker.Cancel()
 			quest.FreeTask(blocker)
 			quest.FreeTask(completion)
-			releaseInsectoid(subInsect)
+			disperseInvoker(subInvoker)
 		}
 	}()
 
 	go func() {
 		defer completion.Resolve(None)
 		defer CatchCancellation()
-		result := coroutine(subInsect, arg)
-		if !subInsect.canceled && !insect.IsCanceled() {
+		result := coroutine(subInvoker, arg)
+		if !subInvoker.canceled && !in.IsCanceled() {
 			blocker.Resolve(result)
 		}
 	}()
@@ -294,11 +294,11 @@ func StartAsyncAR[Arg any, Result any](
 	return blocker
 }
 
-func (insect *insectoid) String() string {
-	return fmt.Sprintf("co-%v", insect.ID)
+func (in *invoker) String() string {
+	return fmt.Sprintf("co-%v", in.ID)
 }
 
-func (insect *insectoid) tryTerminate(none Void, ok bool) (Void, bool) {
+func (in *invoker) tryTerminate(none Void, ok bool) (Void, bool) {
 	if !ok {
 		panic(ErrCancelled)
 	}

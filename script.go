@@ -5,16 +5,16 @@ package carrot
 // or is cancelled.
 type Script struct {
 	mainCoroutine Coroutine
-	mainTurn      *insectoid
+	mainInvoker   *invoker
 	done          bool
 }
 
 // Creates a new script, and starts the mainCoroutine
 // in a new thread.
-func Start(mainCoroutine func(Insect)) *Script {
+func Start(mainCoroutine func(Invoker)) *Script {
 	script := &Script{
 		mainCoroutine: mainCoroutine,
-		mainTurn:      newInsect(),
+		mainInvoker:   newInvoker(),
 		done:          false,
 	}
 	go script.start()
@@ -27,8 +27,8 @@ func (script *Script) start() {
 	defer CatchCancellation()
 
 	script.done = false
-	script.mainCoroutine(script.mainTurn)
-	script.mainTurn.Cancel()
+	script.mainCoroutine(script.mainInvoker)
+	script.mainInvoker.Cancel()
 }
 
 // Restarts the script. If script is still running,
@@ -50,11 +50,11 @@ func (script *Script) IsDone() bool {
 // to advance one step. Update is normally called repeatedly inside a loop,
 // for instance a game loop, or any application loop in the main thread.
 func (script *Script) Update() {
-	script.mainTurn.update()
+	script.mainInvoker.update()
 }
 
 // Cancels the script. All coroutines started inside
 // the script will be cancelled.
 func (script *Script) Cancel() {
-	script.mainTurn.Cancel()
+	script.mainInvoker.Cancel()
 }
