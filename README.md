@@ -1,12 +1,15 @@
 # carrot
 
-A go "coroutine" library, designed to run inside game loturn.
+A go "coroutine" library, designed to run inside game loops.
 Took some inspiration from https://github.com/wraikny/AwaitableCoroutine.
+It is an async library helpful for creating asynchronous state
+machines.
 
 ## Features
 
+- subjectively simple API
 - arbitrarily compose any coroutines
-- cancelable and awaitable sub-coroutines
+- cancelablle and awaitable sub-coroutines
 
 ## Definitions
 
@@ -77,3 +80,5 @@ for !runner.IsDone() {
 }
 
 ```
+
+For more examples, see the coroutine test file.
