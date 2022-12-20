@@ -92,10 +92,6 @@ type Insect interface {
 	StartAsync(coroutine Coroutine) PlainTask[Void]
 }
 
-type Cancellable interface {
-	Cancel()
-}
-
 type insectoid struct {
 	// ID of coroutine insect. Mainly used for debugging.
 	ID int64
@@ -148,7 +144,7 @@ func (insect *insectoid) Delay(count int) {
 }
 
 func (insect *insectoid) DelayAsync(count int) PlainTask[Void] {
-	return StartAsync(insect, func(in Insect) {
+	return StartAsync(insect, func(insect Insect) {
 		for i := 0; i < count; i++ {
 			insect.Yield()
 		}
@@ -203,9 +199,10 @@ func (insect *insectoid) Cancel() {
 
 func (insect *insectoid) reset() {
 	insect.queued = nil
-	insect.updateTask.Reset()
 	insect.canceled = false
 	insect.subInsects.Clear()
+	insect.updateTask.Reset()
+	insect.updateTask.SetPanic(true)
 }
 
 // See docs on the interface Insect.StartAsync

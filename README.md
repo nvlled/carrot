@@ -1,9 +1,10 @@
 # carrot
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/nvlled/carrot.svg)](https://pkg.go.dev/github.com/nvlled/carrot)
+
 A go "coroutine" library, designed to run inside game loops.
+It is an async library helpful for creating asynchronous state machines.
 Took some inspiration from https://github.com/wraikny/AwaitableCoroutine.
-It is an async library helpful for creating asynchronous state
-machines.
 
 ## Features
 
@@ -30,6 +31,11 @@ is one iteration in the game loop.
 ```
 go get github.com/nvlled/carrot
 ```
+
+## Documentation
+
+API reference can be found [here](https://pkg.go.dev/github.com/nvlled/carrot).
+A working example program can be found [here:TODO](#TODO).
 
 ## Example code
 
