@@ -30,7 +30,7 @@ func (slice *sliceSet[T]) Remove(x T) {
 	defer slice.mu.Unlock()
 	index := slices.Index(slice.items, x)
 	if index >= 0 {
-		slices.Delete(slice.items, index, index+1)
+		slice.items = slices.Delete(slice.items, index, index+1)
 	}
 }
 

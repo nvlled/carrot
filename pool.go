@@ -6,6 +6,10 @@ import (
 
 var gathering = mud.NewPool()
 
+func init() {
+	Populate(1000)
+}
+
 // Pre-allocate a number of invokers of the given type.
 func Populate(count int) {
 	mud.PreAlloc(gathering, newInvoker, count)

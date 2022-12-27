@@ -296,17 +296,20 @@ func StartAsyncAR[Arg any, Result any](
 	go func() {
 		// ensure coroutine is done before cleaning up
 		completion.Anticipate()
-		if _, ok := blocker.Anticipate(); !ok {
-			subInvoker.Cancel()
-			quest.FreeTask(blocker)
-			quest.FreeTask(completion)
-			disperseInvoker(subInvoker)
-		}
+		blocker.Anticipate()
+
+		subInvoker.Cancel()
+		quest.FreeTask(blocker)
+		quest.FreeTask(completion)
+		self.release(subInvoker)
 	}()
 
 	go func() {
+		defer subInvoker.yieldTask.Resolve(None)
 		defer completion.Resolve(None)
 		defer CatchCancellation()
+
+		subInvoker.Yield()
 		result := coroutine(subInvoker, arg)
 		if !subInvoker.canceled && !in.IsCanceled() {
 			blocker.Resolve(result)
