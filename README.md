@@ -77,10 +77,10 @@ func mainCoroutine(in carrot.Invoker) {
     )
 }
 
-runner.Start(mainCoroutine)
+script := carrot.Start(mainCoroutine)
 
-for !runner.IsDone() {
-    runner.Update()
+for !script.IsDone() {
+    script.Update()
 }
 
 ```

@@ -29,7 +29,7 @@ func TestBlocking(t *testing.T) {
 	msPerLoop := 10
 	numToTurn := 12
 
-	in := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in carrot.Invoker) {
 		for i := 0; i < numToTurn; i++ {
 			// will wait 10ms before continuing
 			in.Yield()
@@ -37,8 +37,8 @@ func TestBlocking(t *testing.T) {
 	})
 
 	// each loop iteration (roughly) takes 10ms
-	for !in.IsDone() {
-		in.Update()
+	for !script.IsDone() {
+		script.Update()
 		time.Sleep(time.Duration(msPerLoop) * time.Millisecond)
 	}
 
@@ -68,7 +68,7 @@ func TestQueue(t *testing.T) {
 	mainID := goroutineID()
 
 	numInvoke := 0
-	runner := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in carrot.Invoker) {
 		outerID := goroutineID()
 		if mainID == outerID {
 			t.Errorf("it's broke: main=%v, outerID=%v\n", mainID, outerID)
@@ -92,8 +92,8 @@ func TestQueue(t *testing.T) {
 	})
 
 	// main thread
-	for !runner.IsDone() {
-		runner.Update()
+	for !script.IsDone() {
+		script.Update()
 		randomSleep()
 	}
 
@@ -120,7 +120,7 @@ func TestStartAsync1(t *testing.T) {
 		}
 	}
 
-	runner := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in carrot.Invoker) {
 		// asynchronous, will proceed immediately
 		// without waiting for them to finish
 		task1 := carrot.StartAsyncA(in, loopCounter, 10)
@@ -153,9 +153,9 @@ func TestStartAsync1(t *testing.T) {
 		in.Cancel()
 	})
 
-	for !runner.IsDone() {
+	for !script.IsDone() {
 		randomSleep()
-		runner.Update()
+		script.Update()
 	}
 
 	if sum.Load() != 435 {
@@ -195,7 +195,7 @@ func TestStartAsync2(t *testing.T) {
 		return sum
 	}
 
-	runner := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in carrot.Invoker) {
 		// run coroutines synchronously, one by one
 		coroutine(in)
 		coroutineWithArg(in, 20)
@@ -220,9 +220,9 @@ func TestStartAsync2(t *testing.T) {
 		}
 	})
 
-	for !runner.IsDone() {
+	for !script.IsDone() {
 		randomSleep()
-		runner.Update()
+		script.Update()
 	}
 }
 
@@ -242,7 +242,7 @@ func TestStartAsyncWithResult(t *testing.T) {
 		return sum
 	}
 
-	runner := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in carrot.Invoker) {
 		task1 := carrot.StartAsyncAR(in, computeResult, 10)
 		task2 := carrot.StartAsyncAR(in, computeResult, 20)
 		task3 := carrot.StartAsyncAR(in, doSomething, 30)
@@ -257,9 +257,9 @@ func TestStartAsyncWithResult(t *testing.T) {
 		}
 	})
 
-	for !runner.IsDone() {
+	for !script.IsDone() {
 		randomSleep()
-		runner.Update()
+		script.Update()
 	}
 }
 
@@ -268,7 +268,7 @@ func TestDelays(t *testing.T) {
 	x := 0
 	expectedMs := 0
 	notCancelled := false
-	runner := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in carrot.Invoker) {
 		for i := 0; i < 100; i++ {
 			in.StartAsync(func(in carrot.Invoker) {
 				in.Delay((i + 1) * 10000)
@@ -306,13 +306,12 @@ func TestDelays(t *testing.T) {
 		in.Delay(50)
 	})
 
-	for !runner.IsDone() {
+	for !script.IsDone() {
 		time.Sleep(1 * time.Millisecond)
-		runner.Update()
+		script.Update()
 	}
 
 	actualMs := time.Since(startTime).Milliseconds()
-	println(expectedMs, actualMs)
 
 	if !notCancelled {
 		t.Error("... coroutine should not be cancelled")
@@ -332,7 +331,7 @@ func TestCancelSubCoroutines(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			runner := carrot.Start(func(in carrot.Invoker) {
+			script := carrot.Start(func(in carrot.Invoker) {
 				in.StartAsync(func(in carrot.Invoker) {
 					in.StartAsync(func(in carrot.Invoker) {
 						in.Sleep(5000 * time.Millisecond)
@@ -344,9 +343,9 @@ func TestCancelSubCoroutines(t *testing.T) {
 				in.Delay(1)
 				in.Cancel()
 			})
-			for !runner.IsDone() {
+			for !script.IsDone() {
 				time.Sleep(1 * time.Millisecond)
-				runner.Update()
+				script.Update()
 			}
 			time.Sleep(50 * time.Millisecond)
 		}()
@@ -355,7 +354,7 @@ func TestCancelSubCoroutines(t *testing.T) {
 }
 
 func TestEndSubroutine(t *testing.T) {
-	runner := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in carrot.Invoker) {
 		task1 := in.StartAsync(func(in carrot.Invoker) {
 			for i := 0; i < 10; i++ {
 				in.Yield()
@@ -369,8 +368,22 @@ func TestEndSubroutine(t *testing.T) {
 		task2.Await()
 		task1.Await()
 	})
-	for !runner.IsDone() {
+	for !script.IsDone() {
 		time.Sleep(1 * time.Millisecond)
-		runner.Update()
+		script.Update()
 	}
+}
+
+func BenchmarkAsync(b *testing.B) {
+	in := carrot.NewInvoker()
+	fn := func(carrot.Invoker, carrot.Void) carrot.Void {
+		return carrot.None
+	}
+	_ = fn
+	_ = in
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		carrot.StartAsyncAR(in, fn, carrot.None).Await()
+	}
+	b.ReportAllocs()
 }
