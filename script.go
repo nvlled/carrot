@@ -13,9 +13,12 @@ type Script struct {
 // in a new thread.
 func Start(mainCoroutine func(Invoker)) *Script {
 	script := &Script{
-		mainCoroutine: mainCoroutine,
-		mainInvoker:   newInvoker(),
-		done:          false,
+		done:        false,
+		mainInvoker: newInvoker(),
+		mainCoroutine: func(in Invoker) {
+			in.Yield()
+			mainCoroutine(in)
+		},
 	}
 	go script.start()
 
@@ -24,6 +27,7 @@ func Start(mainCoroutine func(Invoker)) *Script {
 
 func (script *Script) start() {
 	defer func() { script.done = true }()
+	defer script.mainInvoker.yieldTask.Resolve(None)
 	defer CatchCancellation()
 
 	script.done = false
@@ -49,6 +53,9 @@ func (script *Script) IsDone() bool {
 // Update causes blocking calls to Yield(), Delay(), DelayAsync() and RunOnUpdate()
 // to advance one step. Update is normally called repeatedly inside a loop,
 // for instance a game loop, or any application loop in the main thread.
+//
+// Note: Update is blocking, and will  not return until
+// a Yield() is called inside the coroutine.
 func (script *Script) Update() {
 	script.mainInvoker.update()
 }

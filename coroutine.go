@@ -93,23 +93,30 @@ type Invoker interface {
 }
 
 type invoker struct {
-	// ID of coroutine in. Mainly used for debugging.
+	// ID of invoker. Mainly used for debugging.
 	ID int64
 
 	updateTask voidTask
+	yieldTask  voidTask
 
 	subInvokers *sliceSet[*invoker]
 
 	queued   action
 	canceled bool
+
+	hasYield bool
 }
 
 var idGen = atomic.Int64{}
 
+func NewInvoker() Invoker {
+	return newInvoker()
+}
 func newInvoker() *invoker {
 	return &invoker{
 		ID:          idGen.Add(1),
 		updateTask:  quest.NewVoidTask(),
+		yieldTask:   quest.NewVoidTask(),
 		subInvokers: newSliceSet[*invoker](),
 	}
 }
@@ -125,16 +132,24 @@ func (in *invoker) create() *invoker {
 	return subInvoker
 }
 
+func (in *invoker) release(subInvoker *invoker) {
+	disperseInvoker(subInvoker)
+	in.subInvokers.Remove(subInvoker)
+}
+
 func (in *invoker) RunOnUpdate(fn func()) {
 	if in.canceled {
 		return
 	}
 	in.queued = fn
-	in.tryTerminate(in.updateTask.AwaitAndReset())
+	in.Yield()
 }
 
 func (in *invoker) Yield() {
+	in.hasYield = true
+	in.yieldTask.Resolve(None)
 	in.tryTerminate(in.updateTask.AwaitAndReset())
+	in.hasYield = false
 }
 
 func (in *invoker) Delay(count int) {
@@ -172,10 +187,14 @@ func (in *invoker) update() {
 	}
 
 	in.updateTask.Resolve(None)
+	if in.hasYield {
+		in.yieldTask.AwaitAndReset()
+	}
 
 	in.subInvokers.Each(func(sub *invoker) {
 		sub.update()
 	})
+
 }
 
 func (in *invoker) IsCanceled() bool {
@@ -188,6 +207,7 @@ func (in *invoker) Cancel() {
 	}
 	in.canceled = true
 	in.queued = nil
+	in.hasYield = false
 
 	in.subInvokers.Each(func(sub *invoker) {
 		sub.Cancel()
@@ -200,8 +220,10 @@ func (in *invoker) Cancel() {
 func (in *invoker) reset() {
 	in.queued = nil
 	in.canceled = false
+	in.hasYield = false
 	in.subInvokers.Clear()
 	in.updateTask.Reset()
+	in.yieldTask.Reset()
 	in.updateTask.SetPanic(true)
 }
 
@@ -300,6 +322,7 @@ func (in *invoker) String() string {
 
 func (in *invoker) tryTerminate(none Void, ok bool) (Void, bool) {
 	if !ok {
+		in.hasYield = false
 		panic(ErrCancelled)
 	}
 	return none, ok
