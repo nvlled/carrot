@@ -102,6 +102,67 @@ func TestQueue(t *testing.T) {
 	}
 }
 
+func TestLoop(t *testing.T) {
+	script := carrot.Start(func(in carrot.Invoker) {
+		for i := 0; i < 100; i++ {
+			in.Yield()
+		}
+	})
+
+	for !script.IsDone() {
+		script.Update()
+	}
+}
+
+func TestTransition(t *testing.T) {
+	var script *carrot.Script
+	count := 0
+	done := false
+	go func() {
+		script = carrot.Create()
+
+		// TODO: I should probably add locks
+		// on Cancel and Restart just in case,
+		// seems to fail when frame time < 1ms
+		time.Sleep(10 * time.Millisecond)
+
+		script.Transition(func(in carrot.Invoker) {
+			for {
+				count++
+				in.Yield()
+			}
+		})
+
+		for count < 10 {
+			time.Sleep(1 * time.Millisecond)
+		}
+
+		script.Transition(func(in carrot.Invoker) {
+			for count < 30 {
+				count++
+				in.Yield()
+			}
+			in.Cancel()
+			done = true
+		})
+	}()
+
+	for {
+		if script != nil {
+			script.Update()
+			if done {
+				break
+			}
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	if count < 30 {
+		t.Error("failed to count up to 30:", count)
+	}
+
+}
+
 func TestStartAsync1(t *testing.T) {
 	counter := atomic.Int32{}
 	sum := atomic.Int32{}

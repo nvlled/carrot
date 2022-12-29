@@ -76,6 +76,18 @@ type Invoker interface {
 	// Returns true if current coroutine has been canceled.
 	IsCanceled() bool
 
+	// Causes the coroutine to block indefinitely and
+	// spiral downwards the endless depths of nothingness, never
+	// again to return from the utter blackness of empty void.
+	Abyss()
+
+	// Changes the current coroutine to a new one. The old
+	// one is cancelled first before running the new coroutine.
+	// This is conceptually equivalent to transitions in
+	// finite state machines.
+	// Similar to script.Transition()
+	Transition(Coroutine)
+
 	// Starts a sub-coroutine asychronously.
 	// Use this method when you need to run a coroutine
 	// in the background, or you need to run several coroutines
@@ -105,6 +117,7 @@ type invoker struct {
 	canceled bool
 
 	hasYield bool
+	script   *Script
 }
 
 var idGen = atomic.Int64{}
@@ -128,11 +141,13 @@ func (in *invoker) Create() Invoker {
 func (in *invoker) create() *invoker {
 	subInvoker := summonInvoker()
 	subInvoker.reset()
+	subInvoker.script = in.script
 	in.subInvokers.Add(subInvoker)
 	return subInvoker
 }
 
 func (in *invoker) release(subInvoker *invoker) {
+	subInvoker.script = nil
 	disperseInvoker(subInvoker)
 	in.subInvokers.Remove(subInvoker)
 }
@@ -319,12 +334,24 @@ func StartAsyncAR[Arg any, Result any](
 	return blocker
 }
 
+func (in *invoker) Transition(coroutine Coroutine) {
+	if in.script != nil {
+		in.script.Transition(coroutine)
+	}
+}
+
+func (in *invoker) Abyss() {
+	for {
+		in.Yield()
+	}
+}
+
 func (in *invoker) String() string {
 	return fmt.Sprintf("co-%v", in.ID)
 }
 
 func (in *invoker) tryTerminate(none Void, ok bool) (Void, bool) {
-	if !ok {
+	if !ok || in.canceled {
 		in.hasYield = false
 		panic(ErrCancelled)
 	}
