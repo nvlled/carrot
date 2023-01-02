@@ -103,14 +103,22 @@ func TestQueue(t *testing.T) {
 }
 
 func TestLoop(t *testing.T) {
+	count := 0
 	script := carrot.Start(func(in carrot.Invoker) {
 		for i := 0; i < 100; i++ {
+			if i >= 50 {
+				count = i
+				in.Cancel()
+			}
 			in.Yield()
 		}
 	})
 
 	for !script.IsDone() {
 		script.Update()
+	}
+	if count != 50 {
+		t.Error("wrong count", count)
 	}
 }
 
@@ -431,6 +439,19 @@ func TestEndSubroutine(t *testing.T) {
 	})
 	for !script.IsDone() {
 		time.Sleep(1 * time.Millisecond)
+		script.Update()
+	}
+}
+
+func BenchmarkYield(b *testing.B) {
+	script := carrot.Start(func(in carrot.Invoker) {
+		for {
+			in.Yield()
+		}
+	})
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
 		script.Update()
 	}
 }

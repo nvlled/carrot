@@ -110,11 +110,13 @@ type invoker struct {
 
 	updateTask voidTask
 	yieldTask  voidTask
+	endTask    voidTask
 
 	subInvokers *sliceSet[*invoker]
 
-	queued   action
-	canceled bool
+	queued      action
+	canceled    bool
+	startCancel bool
 
 	hasYield bool
 	script   *Script
@@ -130,6 +132,7 @@ func newInvoker() *invoker {
 		ID:          idGen.Add(1),
 		updateTask:  quest.NewVoidTask(),
 		yieldTask:   quest.NewVoidTask(),
+		endTask:     quest.NewVoidTask(),
 		subInvokers: newSliceSet[*invoker](),
 	}
 }
@@ -196,6 +199,10 @@ func (in *invoker) update() {
 		return
 	}
 
+	if in.startCancel {
+		in.applyCancel()
+	}
+
 	if in.queued != nil {
 		in.queued()
 		in.queued = nil
@@ -217,10 +224,17 @@ func (in *invoker) IsCanceled() bool {
 }
 
 func (in *invoker) Cancel() {
+	if !in.canceled {
+		in.startCancel = true
+	}
+}
+
+func (in *invoker) applyCancel() {
 	if in.canceled {
 		return
 	}
 	in.canceled = true
+	in.startCancel = false
 	in.queued = nil
 	in.hasYield = false
 
@@ -230,15 +244,18 @@ func (in *invoker) Cancel() {
 	in.subInvokers.Clear()
 
 	in.updateTask.Cancel()
+	in.yieldTask.Cancel()
 }
 
 func (in *invoker) reset() {
 	in.queued = nil
 	in.canceled = false
+	in.startCancel = false
 	in.hasYield = false
 	in.subInvokers.Clear()
 	in.updateTask.Reset()
 	in.yieldTask.Reset()
+	in.endTask.Reset()
 	in.updateTask.SetPanic(true)
 }
 
@@ -351,9 +368,10 @@ func (in *invoker) String() string {
 }
 
 func (in *invoker) tryTerminate(none Void, ok bool) (Void, bool) {
-	if !ok || in.canceled {
+	if !ok {
 		in.hasYield = false
 		panic(ErrCancelled)
 	}
 	return none, ok
+
 }

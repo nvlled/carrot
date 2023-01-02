@@ -5,8 +5,10 @@ package carrot
 // or is cancelled.
 type Script struct {
 	mainCoroutine Coroutine
-	mainInvoker   *invoker
-	done          bool
+	nextCoroutine Coroutine
+
+	mainInvoker *invoker
+	done        bool
 }
 
 // Creates a new script, and starts the mainCoroutine
@@ -18,6 +20,7 @@ func Start(mainCoroutine func(Invoker)) *Script {
 		mainCoroutine: mainCoroutine,
 	}
 	script.mainInvoker.script = script
+	script.mainInvoker.endTask.Resolve(None)
 	go script.start()
 
 	return script
@@ -42,8 +45,11 @@ func (script *Script) start() {
 		return
 	}
 
-	defer func() { script.done = true }()
-	defer script.mainInvoker.yieldTask.Resolve(None)
+	defer func() {
+		script.done = true
+		script.mainInvoker.yieldTask.Resolve(None)
+		script.mainInvoker.endTask.Resolve(None)
+	}()
 	defer CatchCancellation()
 
 	script.done = false
@@ -61,9 +67,7 @@ func (script *Script) startCoroutine() {
 // This is conceptually equivalent to transitions in
 // finite state machines.
 func (script *Script) Transition(newCoroutine Coroutine) {
-	script.Cancel()
-	script.mainCoroutine = newCoroutine
-	script.Restart()
+	script.nextCoroutine = newCoroutine
 }
 
 // Restarts the script. If script is still running,
@@ -72,8 +76,11 @@ func (script *Script) Transition(newCoroutine Coroutine) {
 func (script *Script) Restart() {
 	if !script.done {
 		script.Cancel()
+		script.mainInvoker.endTask.Anticipate()
 	}
+
 	script.mainInvoker.reset()
+	//script.mainInvoker = newInvoker()
 	go script.start()
 }
 
@@ -89,11 +96,18 @@ func (script *Script) IsDone() bool {
 // Note: Update is blocking, and will not return until
 // a Yield() is called inside the coroutine.
 func (script *Script) Update() {
-	script.mainInvoker.update()
+	if script.nextCoroutine != nil {
+		script.Cancel()
+		script.mainCoroutine = script.nextCoroutine
+		script.nextCoroutine = nil
+		script.Restart()
+	} else if !script.done {
+		script.mainInvoker.update()
+	}
 }
 
 // Cancels the script. All coroutines started inside
 // the script will be cancelled.
 func (script *Script) Cancel() {
-	script.mainInvoker.Cancel()
+	script.mainInvoker.applyCancel()
 }
