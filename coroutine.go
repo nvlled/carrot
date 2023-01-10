@@ -2,6 +2,7 @@ package carrot
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -10,16 +11,6 @@ import (
 
 // A Coroutine is function that only takes a In argument.
 type Coroutine = func(Invoker)
-
-// A Coroutine that takes one additional argument.
-type CoroutineA[Arg any] func(Invoker, Arg)
-
-// A Coroutine that returns one result.
-type CoroutineR[Result any] func(Invoker) Result
-
-// A Coroutine that both takes one additional argument
-// and returns one result.
-type CoroutineAR[Arg any, Result any] func(Invoker, Arg) Result
 
 // An Invoker is used to direct the program flow of a coroutine.
 //
@@ -32,11 +23,6 @@ type CoroutineAR[Arg any, Result any] func(Invoker, Arg) Result
 // or indirectly. Blocking methods will panic() with a ErrCancelled,
 // and coroutines will automatically catch this.
 type Invoker interface {
-	// Create a new invoker, for purposes of starting
-	// a new sub coroutine. Use only for a custom
-	// coroutine coordination. It is recommended to use StartAsync
-	// instead.
-	Create() Invoker
 
 	// RunOnUpdate invokes fn in the same thread as Update().
 	// Useful when calling functions that are only useable in the main thread.
@@ -56,18 +42,8 @@ type Invoker interface {
 	// Panics when cancelled.
 	Delay(count int)
 
-	// Delay waits for a number of calls to Update().
-	// Panics when cancelled while Await()'ing the task.
-	// Uses StartAsync.
-	DelayAsync(count int) PlainTask[Void]
-
 	// Sleep blocks and waits for the given duration.
 	Sleep(duration time.Duration)
-
-	// Sleep blocks and waits for the given duration.
-	// Panics when cancelled while Await()'ing the task.
-	// Uses StartAsync.
-	SleepAsync(duration time.Duration) PlainTask[Void]
 
 	// Cancels the coroutine. Cancels all child coroutines created with
 	// StartAsync. This does not affect parent coroutines.
@@ -87,21 +63,6 @@ type Invoker interface {
 	// finite state machines.
 	// Similar to script.Transition()
 	Transition(Coroutine)
-
-	// Starts a sub-coroutine asychronously.
-	// Use this method when you need to run a coroutine
-	// in the background, or you need to run several coroutines
-	// at the same time.
-	// Otherwise, you can just call another coroutine normally as a function.
-	// Similar to the other function StartAsync(in, coroutine)
-	//
-	// Example:
-	//  in.StartAsync(func(in Invoker) { ... })
-	//
-	// Note: the argument in is a new and different in.
-	// Use the same in name "in" in any coroutine, to
-	// avoid accidentally using the parent ins.
-	StartAsync(coroutine Coroutine) PlainTask[Void]
 }
 
 type invoker struct {
@@ -110,16 +71,14 @@ type invoker struct {
 
 	updateTask voidTask
 	yieldTask  voidTask
-	endTask    voidTask
 
-	subInvokers *sliceSet[*invoker]
+	queued   action
+	canceled atomic.Bool
+	hasYield atomic.Bool
 
-	queued      action
-	canceled    bool
-	startCancel bool
+	script *Script
 
-	hasYield bool
-	script   *Script
+	mu sync.Mutex
 }
 
 var idGen = atomic.Int64{}
@@ -129,34 +88,14 @@ func NewInvoker() Invoker {
 }
 func newInvoker() *invoker {
 	return &invoker{
-		ID:          idGen.Add(1),
-		updateTask:  quest.NewVoidTask(),
-		yieldTask:   quest.NewVoidTask(),
-		endTask:     quest.NewVoidTask(),
-		subInvokers: newSliceSet[*invoker](),
+		ID:         idGen.Add(1),
+		updateTask: quest.NewVoidTask(),
+		yieldTask:  quest.NewVoidTask(),
 	}
 }
 
-func (in *invoker) Create() Invoker {
-	return in.create()
-}
-
-func (in *invoker) create() *invoker {
-	subInvoker := summonInvoker()
-	subInvoker.reset()
-	subInvoker.script = in.script
-	in.subInvokers.Add(subInvoker)
-	return subInvoker
-}
-
-func (in *invoker) release(subInvoker *invoker) {
-	subInvoker.script = nil
-	disperseInvoker(subInvoker)
-	in.subInvokers.Remove(subInvoker)
-}
-
 func (in *invoker) RunOnUpdate(fn func()) {
-	if in.canceled {
+	if in.canceled.Load() {
 		return
 	}
 	in.queued = fn
@@ -164,10 +103,11 @@ func (in *invoker) RunOnUpdate(fn func()) {
 }
 
 func (in *invoker) Yield() {
-	in.hasYield = true
+	in.hasYield.Store(true)
+	defer in.hasYield.Store(false)
 	in.yieldTask.Resolve(None)
-	in.tryTerminate(in.updateTask.AwaitAndReset())
-	in.hasYield = false
+	ok := in.updateTask.Yield()
+	in.tryTerminate(None, ok)
 }
 
 func (in *invoker) Delay(count int) {
@@ -176,31 +116,20 @@ func (in *invoker) Delay(count int) {
 	}
 }
 
-func (in *invoker) DelayAsync(count int) PlainTask[Void] {
-	return StartAsync(in, func(in Invoker) {
-		for i := 0; i < count; i++ {
-			in.Yield()
+func (in *invoker) Sleep(sleepDuration time.Duration) {
+	startTime := time.Now()
+	for {
+		in.Yield()
+		elapsed := time.Since(startTime)
+		if elapsed.Microseconds() >= sleepDuration.Microseconds() {
+			break
 		}
-	})
-}
-
-func (in *invoker) Sleep(t time.Duration) {
-	in.SleepAsync(t).Await()
-}
-
-func (in *invoker) SleepAsync(t time.Duration) PlainTask[Void] {
-	return StartAsync(in, func(Invoker) {
-		time.Sleep(t)
-	})
+	}
 }
 
 func (in *invoker) update() {
-	if in.canceled {
+	if in.canceled.Load() {
 		return
-	}
-
-	if in.startCancel {
-		in.applyCancel()
 	}
 
 	if in.queued != nil {
@@ -209,146 +138,40 @@ func (in *invoker) update() {
 	}
 
 	in.updateTask.Resolve(None)
-	if in.hasYield {
-		in.yieldTask.AwaitAndReset()
+	if in.hasYield.Load() {
+		in.yieldTask.Yield()
 	}
-
-	in.subInvokers.Each(func(sub *invoker) {
-		sub.update()
-	})
-
 }
 
 func (in *invoker) IsCanceled() bool {
-	return in.canceled
+	return in.canceled.Load()
 }
 
 func (in *invoker) Cancel() {
-	if !in.canceled {
-		in.startCancel = true
-	}
+	in.script.Cancel()
 }
 
 func (in *invoker) applyCancel() {
-	if in.canceled {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.canceled.Load() {
 		return
 	}
-	in.canceled = true
-	in.startCancel = false
+	in.canceled.Store(true)
 	in.queued = nil
-	in.hasYield = false
-
-	in.subInvokers.Each(func(sub *invoker) {
-		sub.Cancel()
-	})
-	in.subInvokers.Clear()
 
 	in.updateTask.Cancel()
 	in.yieldTask.Cancel()
 }
 
 func (in *invoker) reset() {
+	in.mu.Lock()
+	defer in.mu.Unlock()
 	in.queued = nil
-	in.canceled = false
-	in.startCancel = false
-	in.hasYield = false
-	in.subInvokers.Clear()
+	in.canceled.Store(false)
 	in.updateTask.Reset()
 	in.yieldTask.Reset()
-	in.endTask.Reset()
 	in.updateTask.SetPanic(true)
-}
-
-// See docs on the interface Invoker.StartAsync
-func (in *invoker) StartAsync(coroutine Coroutine) PlainTask[Void] {
-	return StartAsync(in, coroutine)
-}
-
-// Similar to in.StartAsync(coroutine)
-func StartAsync(
-	in Invoker,
-	coroutine Coroutine,
-) PlainTask[Void] {
-	return StartAsyncAR(in, func(in Invoker, _ Void) Void {
-		coroutine(in)
-		return None
-	}, None)
-}
-
-// Similar to StartAsync, but the coroutine takes on addition argument.
-// Example:
-//
-//	StartAsyncA(in, func(in Invoker, arg int) { ... })
-func StartAsyncA[Arg any](
-	in Invoker,
-	coroutine CoroutineA[Arg],
-	arg Arg,
-) PlainTask[Void] {
-	return StartAsyncAR(in, func(in Invoker, arg Arg) Void {
-		coroutine(in, arg)
-		return None
-	}, arg)
-}
-
-// Similar to StartAsync, but the coroutine returns one result.
-// Example:
-//
-//	StartAsyncA(in, func(in Invoker) int { ... })
-func StartAsyncR[Result any](
-	in Invoker,
-	coroutine CoroutineR[Result],
-) PlainTask[Result] {
-	return StartAsyncAR(in, func(in Invoker, _ Void) Result {
-		return coroutine(in)
-	}, None)
-}
-
-// Similar to StartAsync, but the coroutine takes one
-// additional argument and returns one result.
-// Example:
-//
-//	StartAsyncA(in, func(in Invoker, arg string) int { ... })
-//	StartAsyncA(in, func(in Invoker, arg float32) string { ... })
-//	StartAsyncA(in, func(in Invoker, arg int) Unit { ... })
-//
-// Note: if you are going to use Void in either Arg or Result,
-// consider using the other variations of StartAsync.
-func StartAsyncAR[Arg any, Result any](
-	in Invoker,
-	coroutine CoroutineAR[Arg, Result],
-	arg Arg,
-) PlainTask[Result] {
-	self := in.(*invoker)
-	subInvoker := self.create()
-
-	completion := quest.AllocTask[Void]()
-	blocker := quest.AllocTask[Result]()
-	blocker.SetPanic(true)
-
-	go func() {
-		// ensure coroutine is done before cleaning up
-		completion.Anticipate()
-		blocker.Anticipate()
-
-		subInvoker.Cancel()
-		quest.FreeTask(blocker)
-		quest.FreeTask(completion)
-		self.release(subInvoker)
-	}()
-
-	go func() {
-		defer subInvoker.yieldTask.Resolve(None)
-		defer completion.Resolve(None)
-		defer CatchCancellation()
-
-		subInvoker.Yield()
-		result := coroutine(subInvoker, arg)
-		if !subInvoker.canceled && !in.IsCanceled() {
-			blocker.Resolve(result)
-		}
-	}()
-
-	return blocker
 }
 
 func (in *invoker) Transition(coroutine Coroutine) {
@@ -369,7 +192,6 @@ func (in *invoker) String() string {
 
 func (in *invoker) tryTerminate(none Void, ok bool) (Void, bool) {
 	if !ok {
-		in.hasYield = false
 		panic(ErrCancelled)
 	}
 	return none, ok
