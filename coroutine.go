@@ -2,11 +2,10 @@ package carrot
 
 import (
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/nvlled/quest"
+	bits "github.com/nvlled/carrot/atombits"
 )
 
 // A Coroutine is function that only takes a In argument.
@@ -23,15 +22,8 @@ type Coroutine = func(Invoker)
 // or indirectly. Blocking methods will panic() with a ErrCancelled,
 // and coroutines will automatically catch this.
 type Invoker interface {
-
-	// RunOnUpdate invokes fn in the same thread as Update().
-	// Useful when calling functions that are only useable in the main thread.
-	// RunOnUpdate will block until fn is run and returns.
-	//
-	// Note: Avoid doing long-running synchronous operations inside fn.
-	//
-	// Note: Avoid calling Invoker methods inside fn, particularly the ones that panic.
-	RunOnUpdate(fn func())
+	// Returns an id representing the coroutine invocation.
+	ID() int64
 
 	// Yield waits until the next call to Update().
 	// In other words, Yield() waits for one frame.
@@ -45,9 +37,25 @@ type Invoker interface {
 	// Sleep blocks and waits for the given duration.
 	Sleep(duration time.Duration)
 
+	// Repeatedly yields, and stops when *value is false or nil.
+	While(value *bool)
+
+	// Repeatedly yields, and stops when fn returns false.
+	WhileFunc(fn func() bool)
+
+	// Repeatedly yields, and stops when *value is true.
+	// Similar to While(), but with the condition negated.
+	Until(value *bool)
+
+	// Repeatedly yields, and stops when fn returns true.
+	// Similar to WhileFunc(), but with the condition negated.
+	UntilFunc(func() bool)
+
 	// Cancels the coroutine. Cancels all child coroutines created with
 	// StartAsync. This does not affect parent coroutines.
 	Cancel()
+
+	Restart()
 
 	// Returns true if current coroutine has been canceled.
 	IsCanceled() bool
@@ -63,22 +71,35 @@ type Invoker interface {
 	// finite state machines.
 	// Similar to script.Transition()
 	Transition(Coroutine)
+
+	Logf(string, ...any)
 }
 
+type State = uint32
+
+const (
+	StateUnknown State = 0b00
+	StateRunning State = 0b01
+	StateCancel  State = 0b10
+)
+
+type PendingAction = uint32
+
+const (
+	ActionNone    PendingAction = 0b00
+	ActionCancel  PendingAction = 0b01
+	ActionRestart PendingAction = 0b10
+)
+
 type invoker struct {
-	// ID of invoker. Mainly used for debugging.
-	ID int64
+	// id of invoker. Mainly used for debugging.
+	id int64
 
-	updateTask voidTask
-	yieldTask  voidTask
-
-	queued   action
-	canceled atomic.Bool
-	hasYield atomic.Bool
-
+	kanata *katana
 	script *Script
 
-	mu sync.Mutex
+	state  atomic.Uint32
+	action atomic.Uint32
 }
 
 var idGen = atomic.Int64{}
@@ -86,28 +107,47 @@ var idGen = atomic.Int64{}
 func NewInvoker() Invoker {
 	return newInvoker()
 }
+
 func newInvoker() *invoker {
 	return &invoker{
-		ID:         idGen.Add(1),
-		updateTask: quest.NewVoidTask(),
-		yieldTask:  quest.NewVoidTask(),
+		id:     idGen.Add(1),
+		kanata: newKatana(),
 	}
 }
 
-func (in *invoker) RunOnUpdate(fn func()) {
-	if in.canceled.Load() {
-		return
-	}
-	in.queued = fn
-	in.Yield()
+func (in *invoker) ID() int64 {
+	return in.id
 }
 
 func (in *invoker) Yield() {
-	in.hasYield.Store(true)
-	defer in.hasYield.Store(false)
-	in.yieldTask.Resolve(None)
-	ok := in.updateTask.Yield()
-	in.tryTerminate(None, ok)
+	in.kanata.YieldRight()
+	if bits.IsSet(&in.state, StateCancel) {
+		panic(ErrCancelled)
+	}
+}
+
+func (in *invoker) UntilFunc(fn func() bool) {
+	for !fn() {
+		in.Yield()
+	}
+}
+
+func (in *invoker) WhileFunc(fn func() bool) {
+	for fn() {
+		in.Yield()
+	}
+}
+
+func (in *invoker) Until(value *bool) {
+	for value == nil || !*value {
+		in.Yield()
+	}
+}
+
+func (in *invoker) While(value *bool) {
+	for value != nil && *value {
+		in.Yield()
+	}
 }
 
 func (in *invoker) Delay(count int) {
@@ -127,52 +167,41 @@ func (in *invoker) Sleep(sleepDuration time.Duration) {
 	}
 }
 
-func (in *invoker) update() {
-	if in.canceled.Load() {
-		return
-	}
-
-	if in.queued != nil {
-		in.queued()
-		in.queued = nil
-	}
-
-	in.updateTask.Resolve(None)
-	if in.hasYield.Load() {
-		in.yieldTask.Yield()
-	}
+func (in *invoker) IsRunning() bool {
+	return bits.IsSet(&in.state, StateRunning)
 }
 
 func (in *invoker) IsCanceled() bool {
-	return in.canceled.Load()
+	return bits.IsSet(&in.state, StateCancel)
 }
 
 func (in *invoker) Cancel() {
-	in.script.Cancel()
+	bits.Set(&in.action, ActionCancel)
 }
 
-func (in *invoker) applyCancel() {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.canceled.Load() {
-		return
+func (in *invoker) Restart() {
+	bits.Set(&in.action, ActionRestart)
+}
+
+func (in *invoker) setRunning(yes bool) {
+	if yes {
+		bits.Set(&in.state, StateRunning)
+	} else {
+		bits.Unset(&in.state, StateRunning)
 	}
-	in.canceled.Store(true)
-	in.queued = nil
-
-	in.updateTask.Cancel()
-	in.yieldTask.Cancel()
 }
 
-func (in *invoker) reset() {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	in.queued = nil
-	in.canceled.Store(false)
-	in.updateTask.Reset()
-	in.yieldTask.Reset()
-	in.updateTask.SetPanic(true)
+func (in *invoker) applyRestart() {
+	bits.Unset(&in.state, StateCancel)
+	bits.Unset(&in.action, ActionRestart|ActionCancel)
 }
+func (in *invoker) applyCancel() {
+	bits.Set(&in.state, StateCancel)
+	bits.Unset(&in.action, ActionCancel)
+}
+
+func (in *invoker) isRestarting() bool { return bits.IsSet(&in.action, ActionRestart) }
+func (in *invoker) isCancelling() bool { return bits.IsSet(&in.action, ActionCancel) }
 
 func (in *invoker) Transition(coroutine Coroutine) {
 	if in.script != nil {
@@ -187,13 +216,10 @@ func (in *invoker) Abyss() {
 }
 
 func (in *invoker) String() string {
-	return fmt.Sprintf("co-%v", in.ID)
+	return fmt.Sprintf("coroutine-%v", in.id)
 }
 
-func (in *invoker) tryTerminate(none Void, ok bool) (Void, bool) {
-	if !ok {
-		panic(ErrCancelled)
-	}
-	return none, ok
-
+// Use for debugging. Call SetLogging(true) to enable.
+func (in *invoker) Logf(format string, args ...any) {
+	logFn(in.script, format, args...)
 }

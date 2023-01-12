@@ -1,11 +1,7 @@
 package carrot_test
 
 import (
-	"fmt"
 	"math/rand"
-	"runtime"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,12 +9,14 @@ import (
 	"github.com/nvlled/carrot"
 )
 
+var updateDelay = 100 * time.Microsecond
+
 func init() {
 	rand.Seed(time.Now().UnixMilli())
 }
 
 func randomSleep() {
-	ms := 1 + rand.Int31n(1000)
+	ms := 100 + rand.Int31n(500)
 	time.Sleep(time.Duration(ms * int32(time.Microsecond)))
 }
 
@@ -46,57 +44,6 @@ func TestBlocking(t *testing.T) {
 	elapsed := time.Since(startTime).Milliseconds()
 	if int(elapsed) < msPerLoop*numToTurn {
 		t.Errorf("finished too early, elapsed=%vms, expected=%vms", elapsed, msPerLoop*numToTurn)
-	}
-}
-
-func TestQueue(t *testing.T) {
-	// source:
-	// https://gist.github.com/metafeather/3615b23097836bc36579100dac376906#file-main-go-L12
-	goroutineID := func() int {
-		var buf [64]byte
-		n := runtime.Stack(buf[:], false)
-		idField := strings.Fields(strings.TrimPrefix(string(buf[:n]), "goroutine "))[0]
-		id, err := strconv.Atoi(idField)
-		if err != nil {
-			panic(fmt.Sprintf("cannot get goroutine id: %v", err))
-		}
-		return id
-	}
-
-	mainID := goroutineID()
-
-	numInvoke := 0
-	script := carrot.Start(func(in carrot.Invoker) {
-		outerID := goroutineID()
-		if mainID == outerID {
-			t.Errorf("it's broke: main=%v, outerID=%v\n", mainID, outerID)
-		}
-
-		// this should execute in the main thread,
-		// on the next call Update()
-		in.RunOnUpdate(func() {
-			innerID := goroutineID()
-			if mainID != innerID {
-				t.Errorf("it's broke: main=%v, innerID=%v\n", mainID, innerID)
-			}
-			numInvoke++
-		})
-		// will wait for the queued function to finish
-		// before proceeding
-
-		for i := 0; i < 10; i++ {
-			in.Yield()
-		}
-	})
-
-	// main thread
-	for !script.IsDone() {
-		script.Update()
-		randomSleep()
-	}
-
-	if numInvoke != 1 {
-		t.Error("queued functions should be invoked once")
 	}
 }
 
@@ -136,6 +83,7 @@ func TestTransition1(t *testing.T) {
 			for {
 				count.Add(1)
 				in.Yield()
+				in.Logf("co a %v", count.Load())
 			}
 		})
 
@@ -147,6 +95,7 @@ func TestTransition1(t *testing.T) {
 			for count.Load() < 30 {
 				count.Add(1)
 				in.Yield()
+				in.Logf("co b %v", count.Load())
 			}
 			in.Cancel()
 			done.Store(true)
@@ -270,6 +219,165 @@ func TestTransition3(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		script1.Update()
 		script2.Update()
+	}
+}
+
+func TestCoroutineWithoutYield(t *testing.T) {
+	count := atomic.Int32{}
+	script := carrot.Start(func(in carrot.Invoker) {
+		in.Logf("in coroutine")
+		count.Add(1)
+	})
+
+	for !script.IsDone() {
+		script.Update()
+		time.Sleep(updateDelay)
+	}
+
+	if !script.IsDone() {
+		t.Error("script should be done", script.IsDone())
+	}
+	if count.Load() != 1 {
+		t.Error("coroutine should have run once", count.Load())
+	}
+}
+
+func TestCoroutineWithYield(t *testing.T) {
+	count := atomic.Int32{}
+	script := carrot.Start(func(in carrot.Invoker) {
+		in.Logf("before yield")
+		count.Add(1)
+		for i := 0; i < 10; i++ {
+			in.Yield()
+		}
+		in.Logf("after yield")
+	})
+
+	for !script.IsDone() {
+		script.Update()
+		time.Sleep(updateDelay)
+	}
+
+	if !script.IsDone() {
+		t.Error("script should be done", script.IsDone())
+	}
+	if count.Load() != 1 {
+		t.Error("wrong count", count.Load())
+	}
+}
+
+func TestCoroutineCancel(t *testing.T) {
+	count := atomic.Int32{}
+	script := carrot.Start(func(in carrot.Invoker) {
+		for i := 0; i < 10; i++ {
+			in.Yield()
+			if i == 4 {
+				in.Cancel()
+			}
+			count.Add(1)
+			in.Logf("count=%v", i)
+		}
+	})
+
+	for !script.IsDone() {
+		script.Update()
+		time.Sleep(updateDelay)
+	}
+
+	if !script.IsDone() {
+		t.Error("script should be done:", script.IsDone())
+	}
+
+	if count.Load() != 5 {
+		t.Error("wrong count", count.Load())
+	}
+}
+
+func TestCoroutineCancel2(t *testing.T) {
+	count := atomic.Int32{}
+	_ = count
+
+	script0 := carrot.Start(func(in carrot.Invoker) {
+		for {
+			in.Yield()
+		}
+	})
+
+	script := carrot.Start(func(in carrot.Invoker) {
+		script0.Cancel()
+		in.Yield()
+		in.Logf("script0 %v", script0.IsDone())
+		in.UntilFunc(script0.IsDone)
+	})
+
+	for !script.IsDone() {
+		script0.Update()
+		script.Update()
+		script0.Cancel()
+		time.Sleep(updateDelay)
+	}
+
+}
+
+func TestCoroutineRestart(t *testing.T) {
+	count := atomic.Int32{}
+	script := carrot.Start(func(in carrot.Invoker) {
+		count.Add(1)
+		for i := 0; i < 100; i++ {
+			if i == 10 {
+				in.Cancel()
+			}
+		}
+	})
+
+	for !script.IsDone() {
+		script.Update()
+		time.Sleep(updateDelay)
+	}
+
+	script.Restart()
+
+	for !script.IsDone() {
+		script.Update()
+		time.Sleep(updateDelay)
+	}
+
+	if !script.IsDone() {
+		t.Error("script should be done:", script.IsDone())
+	}
+	if count.Load() != 2 {
+		t.Error("wrong count", count.Load())
+	}
+}
+
+func TestCoroutineTransition(t *testing.T) {
+	count := atomic.Int32{}
+	script := carrot.Start(func(in carrot.Invoker) {
+		count.Add(1)
+		for i := 0; i < 100; i++ {
+			if i == 10 {
+				in.Cancel()
+			}
+		}
+	})
+
+	for !script.IsDone() {
+		script.Update()
+		time.Sleep(updateDelay)
+	}
+
+	script.Restart()
+
+	for !script.IsDone() {
+		script.Update()
+		time.Sleep(updateDelay)
+	}
+
+	if !script.IsDone() {
+		t.Error("script should be done:", script.IsDone())
+	}
+	if count.Load() != 2 {
+		t.Error("wrong count", count.Load())
 	}
 }
 

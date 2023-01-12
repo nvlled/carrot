@@ -1,26 +1,7 @@
 package carrot
 
 import (
-	"sync"
-	"time"
-
-	"github.com/nvlled/quest"
-)
-
-type ScriptState = uint32
-
-const (
-	ScriptStateInit    ScriptState = 0
-	ScriptStateStopped ScriptState = 1
-	ScriptStateRunning ScriptState = 3
-)
-
-type ScriptAction = uint32
-
-const (
-	ScriptActionNone    ScriptAction = 0
-	ScriptActionCancel  ScriptAction = 1
-	ScriptActionRestart ScriptAction = 2
+	bits "github.com/nvlled/carrot/atombits"
 )
 
 // A script is an instance of related coroutines running.
@@ -28,36 +9,21 @@ const (
 // or is cancelled.
 type Script struct {
 	mainInvoker *invoker
-
+	// TODO: move to invoker
 	mainCoroutine Coroutine
-	nextCoroutine Coroutine
-
-	restartTask quest.VoidTask
-
-	state        uint32
-	queuedAction uint32
-
-	lastUpdate time.Time
-
-	mu sync.Mutex
 }
 
 // Creates a new script, and starts the mainCoroutine
 // in a new thread.
 func Start(mainCoroutine func(Invoker)) *Script {
 	script := &Script{
-		mainInvoker: newInvoker(),
-		restartTask: quest.NewVoidTask(),
-		//bgInvoker:     newInvoker(),
+		mainInvoker:   newInvoker(),
 		mainCoroutine: mainCoroutine,
 	}
+	script.Logf("created")
 	script.mainInvoker.script = script
+	script.Restart()
 	go script.loopRunner()
-
-	script.mu.Lock()
-	script.mainInvoker.applyCancel()
-	script.restartTask.Resolve(None)
-	script.mu.Unlock()
 
 	return script
 }
@@ -68,80 +34,13 @@ func Start(mainCoroutine func(Invoker)) *Script {
 func Create() *Script {
 	script := &Script{
 		mainInvoker:   newInvoker(),
-		restartTask:   quest.NewVoidTask(),
 		mainCoroutine: nil,
 	}
+	script.Logf("created")
 	script.mainInvoker.script = script
 	go script.loopRunner()
 
 	return script
-}
-
-func (script *Script) loopRunner() {
-	for {
-		script.restartTask.Anticipate()
-		script.startCoroutine()
-
-		script.mu.Lock()
-		script.state = ScriptStateStopped
-		script.mainInvoker.yieldTask.Cancel()
-		script.restartTask.Reset()
-		script.mu.Unlock()
-	}
-}
-
-func (script *Script) startCoroutine() {
-	defer CatchCancellation()
-
-	script.mu.Lock()
-	script.mainInvoker.reset()
-	script.mainInvoker.hasYield.Store(true)
-	script.mainInvoker.yieldTask.Resolve(None)
-	script.state = ScriptStateRunning
-	script.mu.Unlock()
-
-	script.mainInvoker.updateTask.Await()
-
-	script.mu.Lock()
-	script.mainInvoker.updateTask.Reset()
-	script.mainInvoker.hasYield.Store(false)
-	script.state = ScriptStateRunning
-	script.mu.Unlock()
-
-	script.mainCoroutine(script.mainInvoker)
-}
-
-// Changes the current coroutine to a new one. The old
-// one is cancelled first before running the new coroutine.
-// This is conceptually equivalent to transitions in
-// finite state machines.
-func (script *Script) Transition(newCoroutine Coroutine) {
-	script.mu.Lock()
-	script.nextCoroutine = newCoroutine
-	script.nextAction(ScriptActionRestart)
-	script.mu.Unlock()
-}
-
-// Restarts the script. If script is still running,
-// the it is Cancel()'ed first, then mainCoroutine
-// is started in a new goroutine.
-func (script *Script) Restart() {
-	script.mu.Lock()
-	script.nextAction(ScriptActionRestart)
-	script.mu.Unlock()
-}
-
-// Cancels the script. All coroutines started inside
-// the script will be cancelled.
-func (script *Script) Cancel() {
-	script.mu.Lock()
-	script.nextAction(ScriptActionCancel)
-	script.mu.Unlock()
-}
-
-// Returns true if the mainCoroutine finishes running.
-func (script *Script) IsDone() bool {
-	return script.state == ScriptStateStopped
 }
 
 // Update causes blocking calls to Yield(), Delay(), DelayAsync() and RunOnUpdate()
@@ -151,47 +50,75 @@ func (script *Script) IsDone() bool {
 // Note: Update is blocking, and will not return until
 // a Yield() is called inside the coroutine.
 func (script *Script) Update() {
-	none := ScriptActionNone
-	if script.queuedAction != none {
-		script.mu.Lock()
-		if script.queuedAction == ScriptActionCancel {
-			script.applyCancel()
-			script.queuedAction = none
-		} else if script.queuedAction == ScriptActionRestart {
-			if script.applyRestart() {
-				script.queuedAction = none
-			}
-		}
-		script.mu.Unlock()
+	in := script.mainInvoker
+	restartNow := in.isRestarting()
+	if in.isCancelling() {
+		in.applyCancel()
+		restartNow = false
+	} else if restartNow {
+		bits.Unset(&in.action, ActionRestart)
+		in.applyRestart()
 	}
 
-	script.mainInvoker.update()
-}
-
-func (script *Script) applyCancel() {
-	if script.state == ScriptStateRunning {
-		script.mainInvoker.applyCancel()
+	if script.mainCoroutine != nil && (in.IsRunning() || restartNow) {
+		in.kanata.YieldLeft()
 	}
 }
 
-func (script *Script) applyRestart() bool {
-	if script.state == ScriptStateRunning {
-		script.mainInvoker.applyCancel()
-		script.mainInvoker.reset()
-		return false
-	}
+func (script *Script) loopRunner() {
+	in := script.mainInvoker
+	in.setRunning(true)
+	for {
+		script.Logf("loop start")
+		script.mainInvoker.kanata.YieldRight()
 
-	if script.nextCoroutine != nil {
-		script.mainCoroutine = script.nextCoroutine
-		script.nextCoroutine = nil
+		script.Logf("coroutine start")
+		in.setRunning(true)
+		script.startCoroutine()
+
+		script.Logf("coroutine end")
+		in.setRunning(false)
 	}
-	script.restartTask.Resolve(None)
-	script.mainInvoker.yieldTask.Resolve(None)
-	return true
 }
 
-func (script *Script) nextAction(action ScriptAction) {
-	if script.queuedAction < action {
-		script.queuedAction = action
-	}
+func (script *Script) startCoroutine() {
+	defer catchCancellation()
+	script.mainCoroutine(script.mainInvoker)
+}
+
+// Changes the current coroutine to a new one. The old
+// one is cancelled first before running the new coroutine.
+// This is conceptually equivalent to transitions in
+// finite state machines.
+func (script *Script) Transition(newCoroutine Coroutine) {
+	script.mainCoroutine = newCoroutine
+	script.mainInvoker.Restart()
+	script.mainInvoker.Cancel()
+}
+
+// Restarts the script. If script is still running,
+// it is Cancel()'ed first, then the coroutine
+// is started again.
+// Note: restart will be done in the next Update()
+func (script *Script) Restart() {
+	script.mainInvoker.Restart()
+}
+
+// Cancels the script. All coroutines started inside
+// the script will be cancelled.
+// Note: cancellation will be done in the next Update()
+func (script *Script) Cancel() {
+	script.mainInvoker.Cancel()
+}
+
+// Returns true if the main coroutine finishes running
+// and is not restarting.
+func (script *Script) IsDone() bool {
+	in := script.mainInvoker
+	return !in.IsRunning() && !in.isRestarting()
+}
+
+// Use for debugging. Call SetLogging(true) to enable.
+func (script *Script) Logf(format string, args ...any) {
+	logFn(script, format, args...)
 }

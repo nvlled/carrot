@@ -1,7 +1,7 @@
 package carrot
 
 import (
-	"github.com/nvlled/quest"
+	"errors"
 )
 
 // The error that is thrown while waiting on
@@ -10,37 +10,19 @@ import (
 // when cancelled.
 // No need to explicitly handle and recover from
 // this error inside a coroutine.
-//
-// Note: if invoker methods are called an another thread outside a coroutine,
-// then this error needs to be handled. You may use the helper function:
-//
-//	...
-//	defer CatchCancelled()
-//	invoker.Yield()
-var ErrCancelled = quest.ErrCancelled
+var ErrCancelled = errors.New("coroutine has been cancelled")
 
-type Void = quest.Void
+// A type representing none.
+// Used on tasks that doesn't return
+// value: Task[Void]
+type Void struct{}
 
-var None = quest.None
+// That value that represents nothing.
+// Similar to nil, but safer.
+var None = Void{}
 
-// A PlainTask is a cancellable Awaitable.
-// Similar to Task, but simpler to avoid
-// unwanted state changes.
-type PlainTask[T any] interface {
-	quest.Awaitable[T]
-	Cancel()
-}
-
-type action = func()
-
-type voidTask = quest.Task[Void]
-
-func CatchCancellation(optionalOnCancel ...action) {
-	if err := recover(); err == ErrCancelled {
-		for _, fn := range optionalOnCancel {
-			fn()
-		}
-	} else if err != nil {
+func catchCancellation() {
+	if err := recover(); err != nil && err != ErrCancelled {
 		panic(err)
 	}
 }
