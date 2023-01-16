@@ -56,10 +56,12 @@ type Invoker struct {
 var idGen = atomic.Int64{}
 
 func NewInvoker() *Invoker {
-	return &Invoker{
+	in := &Invoker{
 		ID:     idGen.Add(1),
 		kanata: newKatana(),
 	}
+	go in.loopRunner()
+	return in
 }
 
 // Yield waits until the next call to Update().
@@ -182,7 +184,7 @@ func (in *Invoker) Transition(newCoroutine Coroutine) {
 // See also the test functions TestAsync* for a more thorough
 // example.
 func (in *Invoker) StartAsync(coroutine Coroutine) *Invoker {
-	subIn := NewInvoker()
+	subIn := summonInvoker()
 	subIn.initialize(coroutine)
 	in.subsMu.Lock()
 	in.subs = append(in.subs, subIn)
@@ -270,6 +272,10 @@ func (in *Invoker) waitForSubsToEnd() {
 	in.subs = in.subs[:0]
 	in.subsMu.Unlock()
 
+	for _, s := range subs {
+		disperseInvoker(s)
+	}
+
 }
 
 func (in *Invoker) update() {
@@ -298,7 +304,6 @@ func (in *Invoker) initialize(coroutine Coroutine) {
 	in.coroutine = coroutine
 	in.Logf("created")
 	in.Restart()
-	go in.loopRunner()
 
 }
 

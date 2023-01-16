@@ -384,6 +384,7 @@ func TestCoroutineTransition(t *testing.T) {
 		t.Error("wrong count", count.Load())
 	}
 }
+
 func TestAsyncSimple(t *testing.T) {
 	counter := atomic.Int32{}
 	done := atomic.Bool{}
