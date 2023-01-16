@@ -2,6 +2,7 @@ package carrot
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -60,6 +61,8 @@ type Invoker interface {
 	// Returns true if current coroutine has been canceled.
 	IsCanceled() bool
 
+	IsDone() bool
+
 	// Causes the coroutine to block indefinitely and
 	// spiral downwards the endless depths of nothingness, never
 	// again to return from the utter blackness of empty void.
@@ -73,6 +76,8 @@ type Invoker interface {
 	Transition(Coroutine)
 
 	Logf(string, ...any)
+
+	StartAsync(Coroutine) Invoker
 }
 
 type State = uint32
@@ -100,6 +105,11 @@ type invoker struct {
 
 	state  atomic.Uint32
 	action atomic.Uint32
+
+	mainCoroutine Coroutine
+
+	subs   []*invoker
+	subsMu sync.RWMutex
 }
 
 var idGen = atomic.Int64{}
@@ -113,6 +123,14 @@ func newInvoker() *invoker {
 		id:     idGen.Add(1),
 		kanata: newKatana(),
 	}
+}
+
+func (in *invoker) initialize(coroutine Coroutine) {
+	in.mainCoroutine = coroutine
+	in.Logf("created")
+	in.Restart()
+	go in.loopRunner()
+
 }
 
 func (in *invoker) ID() int64 {
@@ -203,12 +221,6 @@ func (in *invoker) applyCancel() {
 func (in *invoker) isRestarting() bool { return bits.IsSet(&in.action, ActionRestart) }
 func (in *invoker) isCancelling() bool { return bits.IsSet(&in.action, ActionCancel) }
 
-func (in *invoker) Transition(coroutine Coroutine) {
-	if in.script != nil {
-		in.script.Transition(coroutine)
-	}
-}
-
 func (in *invoker) Abyss() {
 	for {
 		in.Yield()
@@ -222,4 +234,98 @@ func (in *invoker) String() string {
 // Use for debugging. Call SetLogging(true) to enable.
 func (in *invoker) Logf(format string, args ...any) {
 	logFn(in.script, format, args...)
+}
+
+func (in *invoker) StartAsync(coroutine Coroutine) Invoker {
+	subIn := newInvoker()
+	subIn.initialize(coroutine)
+	in.subsMu.Lock()
+	in.subs = append(in.subs, subIn)
+	in.subsMu.Unlock()
+
+	return subIn
+}
+
+func (in *invoker) loopRunner() {
+	in.setRunning(true)
+	for {
+		in.Logf("loop start")
+		in.kanata.YieldRight()
+
+		in.Logf("coroutine start")
+		in.setRunning(true)
+		in.startCoroutine()
+
+		in.waitForSubsToEnd()
+
+		in.Logf("coroutine end")
+		in.setRunning(false)
+	}
+}
+
+func (in *invoker) startCoroutine() {
+	defer catchCancellation()
+	in.mainCoroutine(in)
+}
+
+func (in *invoker) waitForSubsToEnd() {
+	in.subsMu.RLock()
+	subs := in.subs
+	in.subsMu.RUnlock()
+
+	for _, s := range subs {
+		s.Cancel()
+	}
+
+	done := false
+	for !done {
+		done = true
+		for _, s := range subs {
+			if !s.IsDone() {
+				done = false
+				break
+			}
+
+		}
+		if !done {
+			in.kanata.YieldRight()
+		}
+	}
+
+	in.subsMu.Lock()
+	in.subs = in.subs[:0]
+	in.subsMu.Unlock()
+
+}
+
+func (in *invoker) update() {
+	restartNow := in.isRestarting()
+	if in.isCancelling() {
+		in.applyCancel()
+		restartNow = false
+	} else if restartNow {
+		bits.Unset(&in.action, ActionRestart)
+		in.applyRestart()
+	}
+
+	if in.mainCoroutine != nil && (in.IsRunning() || restartNow) {
+		in.kanata.YieldLeft()
+	}
+
+	in.subsMu.RLock()
+	subs := in.subs
+	in.subsMu.RUnlock()
+	for _, sub := range subs {
+		sub.update()
+	}
+}
+
+func (in *invoker) IsDone() bool {
+	return !in.IsRunning() && !in.isRestarting()
+}
+
+func (in *invoker) Transition(newCoroutine Coroutine) {
+	in.mainCoroutine = newCoroutine
+	in.Restart()
+	in.Cancel()
 }

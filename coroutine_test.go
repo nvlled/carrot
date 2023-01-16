@@ -1,7 +1,11 @@
 package carrot_test
 
 import (
+	"fmt"
 	"math/rand"
+	"sort"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -378,6 +382,78 @@ func TestCoroutineTransition(t *testing.T) {
 	}
 	if count.Load() != 2 {
 		t.Error("wrong count", count.Load())
+	}
+}
+
+func TestAsync(t *testing.T) {
+	resultList := []string{}
+	var mu sync.Mutex
+	add := func(s string) {
+		mu.Lock()
+		resultList = append(resultList, s)
+		mu.Unlock()
+	}
+
+	script := carrot.Start(func(in carrot.Invoker) {
+		subA := in.StartAsync(func(in carrot.Invoker) {
+			subB := in.StartAsync(func(in carrot.Invoker) {
+				for i := 0; i < 3; i++ {
+					add(fmt.Sprintf("%v%v", "b", i))
+					in.Yield()
+				}
+			})
+			subC := in.StartAsync(func(in carrot.Invoker) {
+				for i := 0; i < 5; i++ {
+					add(fmt.Sprintf("%v%v", "c", i))
+					in.Yield()
+				}
+			})
+			_ = subC
+			for i := 0; i < 10; i++ {
+				if i == 4 {
+					subB.Cancel()
+				}
+				add(fmt.Sprintf("%v%v", "a", i))
+				in.Yield()
+			}
+
+			in.UntilFunc(subB.IsDone)
+		})
+
+		subD := in.StartAsync(func(in carrot.Invoker) {
+			for i := 0; i < 100; i++ {
+				add(fmt.Sprintf("%v%v", "d", i))
+				in.Yield()
+			}
+		})
+		_ = subD
+
+		for i := 0; i < 10; i++ {
+			add(fmt.Sprintf("%v%v", "x", i))
+			in.Yield()
+		}
+
+		in.UntilFunc(subA.IsDone)
+
+	})
+
+	for !script.IsDone() {
+		script.Update()
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	sort.Strings(resultList)
+	result := strings.Join(resultList, " ")
+
+	// Note: this particular output isn't important here, as long as it consistently
+	// produces the same output for every test. If this test fails, try commenting
+	// out the t.Error() below and observe the results.
+	expected := "a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 b0 b1 b2 c0 c1 c2 c3 c4 d0 d1 d10 d2 d3 d4 d5 d6 d7 d8 d9 x0 x1 x2 x3 x4 x5 x6 x7 x8 x9"
+
+	if result != expected {
+		println(result)
+		println(expected)
+		t.Error("coroutine execution must be deterministic")
 	}
 }
 
