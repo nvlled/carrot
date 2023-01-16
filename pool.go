@@ -12,30 +12,26 @@ func init() {
 
 // Pre-allocate a number of invokers of the given type.
 func Populate(count int) {
-	mud.PreAlloc(gathering, newInvoker, count)
+	mud.PreAlloc(gathering, NewInvoker, count)
 }
 
 // Allocate a invoker using an object pool.
 // Free the invoker afterwards with Free().
 // Use only when gc is a concern.
-func SummonInvoker() Invoker {
-	in := mud.Alloc(gathering, newInvoker)
+func SummonInvoker() *Invoker {
+	in := mud.Alloc(gathering, NewInvoker)
 	return in
 }
 
 // Free a invoker that was previously Alloc()'d.
-func DisperseInvoker(in Invoker) {
-	object, ok := in.(*invoker)
-	if !ok {
-		return
-	}
-	mud.Free(gathering, object)
+func DisperseInvoker(in *Invoker) {
+	mud.Free(gathering, in)
 }
 
-func summonInvoker() *invoker {
-	in := mud.Alloc(gathering, newInvoker)
+func summonInvoker() *Invoker {
+	in := mud.Alloc(gathering, NewInvoker)
 	return in
 }
-func disperseInvoker(in *invoker) {
+func disperseInvoker(in *Invoker) {
 	mud.Free(gathering, in)
 }

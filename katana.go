@@ -14,7 +14,7 @@ package carrot
 // |  YieldLeft() //2       |   println("b")
 // | Update()               |  // exit coroutine
 // |  YieldLeft() //3       |  running = false
-// | 	                    |  // next loop iteration
+// | 	                    |  // next loop iteration if restarted
 // | 	                    |  YieldRight() // 3
 //
 // Note each yield has a matching number.
@@ -23,7 +23,7 @@ package carrot
 // to start.
 // The second YieldRight() suspends the coroutine,
 // and resumes control on the main thread.
-// The output "a\nb\n" will be printed on a separate game loop.
+// The output "a\n" and "b\n" will be printed on a separate game loop.
 // It's called katana because one of the following holds:
 // - why not
 // - I'm bad at naming

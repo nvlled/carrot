@@ -4,17 +4,16 @@ package carrot
 // The script will end when the main coroutine ends
 // or is cancelled.
 type Script struct {
-	mainInvoker *invoker
+	mainInvoker *Invoker
 }
 
 // Creates a new script, and starts the mainCoroutine
 // in a new thread.
-func Start(mainCoroutine func(Invoker)) *Script {
+func Start(coroutine Coroutine) *Script {
 	script := &Script{
-		mainInvoker: newInvoker(),
+		mainInvoker: NewInvoker(),
 	}
-	script.mainInvoker.initialize(mainCoroutine)
-	script.mainInvoker.script = script
+	script.mainInvoker.initialize(coroutine)
 
 	return script
 }
@@ -24,10 +23,9 @@ func Start(mainCoroutine func(Invoker)) *Script {
 // or in.Transition(otherCoroutine)
 func Create() *Script {
 	script := &Script{
-		mainInvoker: newInvoker(),
+		mainInvoker: NewInvoker(),
 	}
 	script.mainInvoker.initialize(nil)
-	script.mainInvoker.script = script
 
 	return script
 }
@@ -73,5 +71,5 @@ func (script *Script) IsDone() bool {
 
 // Use for debugging. Call SetLogging(true) to enable.
 func (script *Script) Logf(format string, args ...any) {
-	logFn(script, format, args...)
+	logFn(script.mainInvoker, format, args...)
 }

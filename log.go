@@ -5,14 +5,14 @@ import (
 	"log"
 )
 
-type LogFn func(script *Script, format string, args ...any)
+type LogFn func(in *Invoker, format string, args ...any)
 
 var logFn LogFn = logNone
 
-func logNone(script *Script, format string, args ...any) {}
+func logNone(in *Invoker, format string, args ...any) {}
 
-func logSome(script *Script, format string, args ...any) {
-	log.Printf(fmt.Sprintf("[coroutine-%v] ", script.mainInvoker.id)+format, args...)
+func logSome(in *Invoker, format string, args ...any) {
+	log.Printf(fmt.Sprintf("[coroutine-%v] ", in.ID)+format, args...)
 }
 
 func SetLogging(enable bool) {

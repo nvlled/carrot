@@ -29,7 +29,7 @@ func TestBlocking(t *testing.T) {
 	msPerLoop := 10
 	numToTurn := 12
 
-	script := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in *carrot.Invoker) {
 		for i := 0; i < numToTurn; i++ {
 			// will wait 10ms before continuing
 			in.Yield()
@@ -53,7 +53,7 @@ func TestBlocking(t *testing.T) {
 
 func TestLoop(t *testing.T) {
 	count := 0
-	script := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in *carrot.Invoker) {
 		for i := 0; i < 100; i++ {
 			if i >= 50 {
 				count = i
@@ -83,7 +83,7 @@ func TestTransition1(t *testing.T) {
 		// seems to fail when frame time < 1ms
 		time.Sleep(10 * time.Millisecond)
 
-		script.Transition(func(in carrot.Invoker) {
+		script.Transition(func(in *carrot.Invoker) {
 			for {
 				count.Add(1)
 				in.Yield()
@@ -95,7 +95,7 @@ func TestTransition1(t *testing.T) {
 			time.Sleep(1 * time.Millisecond)
 		}
 
-		script.Transition(func(in carrot.Invoker) {
+		script.Transition(func(in *carrot.Invoker) {
 			for count.Load() < 30 {
 				count.Add(1)
 				in.Yield()
@@ -122,7 +122,7 @@ func TestTransition1(t *testing.T) {
 
 }
 func TestTransition2(t *testing.T) {
-	coroutine := func(in carrot.Invoker) {
+	coroutine := func(in *carrot.Invoker) {
 		for {
 			in.Yield()
 		}
@@ -153,7 +153,7 @@ func TestTransition2(t *testing.T) {
 }
 
 func TestTransition3(t *testing.T) {
-	coroutine1 := func(in carrot.Invoker) {
+	coroutine1 := func(in *carrot.Invoker) {
 		for {
 			in.Yield()
 			for i := 0; i < 1000; i++ {
@@ -161,7 +161,7 @@ func TestTransition3(t *testing.T) {
 			in.Yield()
 		}
 	}
-	coroutine2 := func(in carrot.Invoker) {
+	coroutine2 := func(in *carrot.Invoker) {
 		for {
 			in.Yield()
 			for i := 0; i < 1000; i++ {
@@ -170,10 +170,10 @@ func TestTransition3(t *testing.T) {
 			in.Yield()
 		}
 	}
-	coroutine3 := func(in carrot.Invoker) {
+	coroutine3 := func(in *carrot.Invoker) {
 	}
 	script1 := carrot.Start(coroutine1)
-	script2 := carrot.Start(func(in carrot.Invoker) {
+	script2 := carrot.Start(func(in *carrot.Invoker) {
 		i := 0
 		for n := 0; n < 1000; n++ {
 			i++
@@ -228,7 +228,7 @@ func TestTransition3(t *testing.T) {
 
 func TestCoroutineWithoutYield(t *testing.T) {
 	count := atomic.Int32{}
-	script := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in *carrot.Invoker) {
 		in.Logf("in coroutine")
 		count.Add(1)
 	})
@@ -248,7 +248,7 @@ func TestCoroutineWithoutYield(t *testing.T) {
 
 func TestCoroutineWithYield(t *testing.T) {
 	count := atomic.Int32{}
-	script := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in *carrot.Invoker) {
 		in.Logf("before yield")
 		count.Add(1)
 		for i := 0; i < 10; i++ {
@@ -272,7 +272,7 @@ func TestCoroutineWithYield(t *testing.T) {
 
 func TestCoroutineCancel(t *testing.T) {
 	count := atomic.Int32{}
-	script := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in *carrot.Invoker) {
 		for i := 0; i < 10; i++ {
 			in.Yield()
 			if i == 4 {
@@ -301,13 +301,13 @@ func TestCoroutineCancel2(t *testing.T) {
 	count := atomic.Int32{}
 	_ = count
 
-	script0 := carrot.Start(func(in carrot.Invoker) {
+	script0 := carrot.Start(func(in *carrot.Invoker) {
 		for {
 			in.Yield()
 		}
 	})
 
-	script := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in *carrot.Invoker) {
 		script0.Cancel()
 		in.Yield()
 		in.Logf("script0 %v", script0.IsDone())
@@ -325,7 +325,7 @@ func TestCoroutineCancel2(t *testing.T) {
 
 func TestCoroutineRestart(t *testing.T) {
 	count := atomic.Int32{}
-	script := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in *carrot.Invoker) {
 		count.Add(1)
 		for i := 0; i < 100; i++ {
 			if i == 10 {
@@ -356,7 +356,7 @@ func TestCoroutineRestart(t *testing.T) {
 
 func TestCoroutineTransition(t *testing.T) {
 	count := atomic.Int32{}
-	script := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in *carrot.Invoker) {
 		count.Add(1)
 		for i := 0; i < 100; i++ {
 			if i == 10 {
@@ -384,8 +384,54 @@ func TestCoroutineTransition(t *testing.T) {
 		t.Error("wrong count", count.Load())
 	}
 }
+func TestAsyncSimple(t *testing.T) {
+	counter := atomic.Int32{}
+	done := atomic.Bool{}
 
-func TestAsync(t *testing.T) {
+	script := carrot.Start(func(in *carrot.Invoker) {
+		subIn1 := in.StartAsync(func(in *carrot.Invoker) {
+			for i := 0; i < 10; i++ {
+				counter.Add(1)
+				in.Yield()
+			}
+		})
+
+		subIn2 := in.StartAsync(func(in *carrot.Invoker) {
+			for {
+				if done.Load() {
+					t.Error("sub-coroutine should stop running when parent coroutine stops.")
+				}
+
+				counter.Add(100)
+				in.Yield()
+			}
+		})
+
+		// Note: avoid using subIn* outside the scope of this function,
+		// as they be disposed and freed for subsequent use.
+
+		// wait for subIn1 to finish
+		in.UntilFunc(subIn1.IsDone)
+
+		// don't wait for subIn2 to finish, it will be automatically cancelled
+		_ = subIn2
+	})
+
+	for !script.IsDone() {
+		script.Update()
+		time.Sleep(updateDelay)
+	}
+
+	done.Store(true)
+
+	result := counter.Load()
+	if result != 1110 {
+		t.Errorf("hmm, actual counter value is %v", result)
+	}
+
+}
+
+func TestAsyncNested(t *testing.T) {
 	resultList := []string{}
 	var mu sync.Mutex
 	add := func(s string) {
@@ -394,15 +440,15 @@ func TestAsync(t *testing.T) {
 		mu.Unlock()
 	}
 
-	script := carrot.Start(func(in carrot.Invoker) {
-		subA := in.StartAsync(func(in carrot.Invoker) {
-			subB := in.StartAsync(func(in carrot.Invoker) {
+	script := carrot.Start(func(in *carrot.Invoker) {
+		subA := in.StartAsync(func(in *carrot.Invoker) {
+			subB := in.StartAsync(func(in *carrot.Invoker) {
 				for i := 0; i < 3; i++ {
 					add(fmt.Sprintf("%v%v", "b", i))
 					in.Yield()
 				}
 			})
-			subC := in.StartAsync(func(in carrot.Invoker) {
+			subC := in.StartAsync(func(in *carrot.Invoker) {
 				for i := 0; i < 5; i++ {
 					add(fmt.Sprintf("%v%v", "c", i))
 					in.Yield()
@@ -420,7 +466,7 @@ func TestAsync(t *testing.T) {
 			in.UntilFunc(subB.IsDone)
 		})
 
-		subD := in.StartAsync(func(in carrot.Invoker) {
+		subD := in.StartAsync(func(in *carrot.Invoker) {
 			for i := 0; i < 100; i++ {
 				add(fmt.Sprintf("%v%v", "d", i))
 				in.Yield()
@@ -439,14 +485,14 @@ func TestAsync(t *testing.T) {
 
 	for !script.IsDone() {
 		script.Update()
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(updateDelay)
 	}
 
 	sort.Strings(resultList)
 	result := strings.Join(resultList, " ")
 
 	// Note: this particular output isn't important here, as long as it consistently
-	// produces the same output for every test. If this test fails, try commenting
+	// produces the same output every time the same test is ran. If this test fails, try commenting
 	// out the t.Error() below and observe the results.
 	expected := "a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 b0 b1 b2 c0 c1 c2 c3 c4 d0 d1 d10 d2 d3 d4 d5 d6 d7 d8 d9 x0 x1 x2 x3 x4 x5 x6 x7 x8 x9"
 
@@ -458,7 +504,7 @@ func TestAsync(t *testing.T) {
 }
 
 func BenchmarkYield(b *testing.B) {
-	script := carrot.Start(func(in carrot.Invoker) {
+	script := carrot.Start(func(in *carrot.Invoker) {
 		for {
 			in.Yield()
 		}
