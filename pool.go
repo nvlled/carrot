@@ -4,21 +4,23 @@ import (
 	"github.com/nvlled/mud"
 )
 
-var gathering = mud.NewPool()
+// TODO: use arena
+var coroutinePool = mud.NewPool()
 
 func init() {
-	Populate(10)
+	PreAllocCoroutines(5)
 }
 
-// Pre-allocate a number of invokers of the given type.
-func Populate(count int) {
-	mud.PreAlloc(gathering, NewInvoker, count)
+// Pre-allocate a number of coroutine.
+func PreAllocCoroutines(count int) {
+	mud.PreAlloc(coroutinePool, NewControl, count)
 }
 
-func summonInvoker() *Invoker {
-	in := mud.Alloc(gathering, NewInvoker)
-	return in
+func allocCoroutine() *Control {
+	co := mud.Alloc(coroutinePool, NewControl)
+	return co
 }
-func disperseInvoker(in *Invoker) {
-	mud.Free(gathering, in)
+
+func freeCoroutine(co *Control) {
+	mud.Free(coroutinePool, co)
 }

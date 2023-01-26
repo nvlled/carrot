@@ -5,13 +5,13 @@ import (
 	"log"
 )
 
-type LogFn func(in *Invoker, format string, args ...any)
+type LogFn func(in *Control, format string, args ...any)
 
 var logFn LogFn = logNone
 
-func logNone(in *Invoker, format string, args ...any) {}
+func logNone(in *Control, format string, args ...any) {}
 
-func logSome(in *Invoker, format string, args ...any) {
+func logSome(in *Control, format string, args ...any) {
 	log.Printf(fmt.Sprintf("[coroutine-%v] ", in.ID)+format, args...)
 }
 

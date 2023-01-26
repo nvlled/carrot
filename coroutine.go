@@ -9,8 +9,46 @@ import (
 	bits "github.com/nvlled/carrot/atombits"
 )
 
-// A Coroutine is function that only takes an *Invoker argument.
-type Coroutine = func(*Invoker)
+// An Control is used to direct the program flow of a coroutine.
+//
+//	Note: Methods may block for one or more several frames,
+//	except for those labeled with Async.
+//
+//	Note: Methods are all concurrent-safe.
+//
+//	Note: Control methods should be only called within a coroutine
+//	since yield methods will panic with ErrCancelled when cancelled.
+//	This error will automatically be handled inside a coroutine,
+//	no need to try to recover from this.
+type Control struct {
+	// ID of invoker. Mainly used for debugging.
+	ID int64
+
+	kanata *katana
+
+	state  atomic.Uint32
+	action atomic.Uint32
+
+	coroutine Coroutine
+
+	subsMu sync.RWMutex
+
+	subControls     []*Control
+	tempSubControls []*Control
+}
+
+// A SubControl is a limited Control
+// that is returned from the StartAsync method.
+type SubControl interface {
+	Cancel()
+	Restart()
+	Transition(Coroutine)
+	IsRunning() bool
+	IsDone() bool
+}
+
+// A Coroutine is function that only takes an *Control argument.
+type Coroutine = func(*Control)
 
 type coState = uint32
 
@@ -29,68 +67,41 @@ const (
 	actionRestart coAction = 0b10
 )
 
-// An Invoker is used to direct the program flow of a coroutine.
-//
-// Note: Methods may block for one or more several frames,
-// except for those labeled with Async.
-//
-// Note: Methods are all concurrent-safe.
-//
-// Note: Blocking methods should be called from a coroutine, directly
-// or indirectly. Blocking methods will panic() with a ErrCancelled,
-// and coroutines will automatically catch this.
-type Invoker struct {
-	// ID of invoker. Mainly used for debugging.
-	ID int64
-
-	kanata *katana
-
-	state  atomic.Uint32
-	action atomic.Uint32
-
-	coroutine Coroutine
-
-	subs   []*Invoker
-	subsMu sync.RWMutex
-
-	subsTemp []*Invoker
-}
-
 var idGen = atomic.Int64{}
 
-func NewInvoker() *Invoker {
-	in := &Invoker{
+func NewControl() *Control {
+	ctrl := &Control{
 		ID:     idGen.Add(1),
 		kanata: newKatana(),
 	}
-	go in.loopRunner()
-	return in
+	go ctrl.loopRunner()
+	return ctrl
 }
 
 // Yield waits until the next call to Update().
 // In other words, Yield() waits for one frame.
 // Panics when cancelled.
-func (in *Invoker) Yield() {
-	in.kanata.YieldRight()
-	if in.isCanceled() {
+func (ctrl *Control) Yield() {
+	ctrl.kanata.YieldRight()
+	if ctrl.isCanceled() {
 		panic(ErrCancelled)
 	}
 }
 
 // Delay waits for a number of calls to Update().
 // Panics when cancelled.
-func (in *Invoker) Delay(count int) {
+func (ctrl *Control) Delay(count int) {
 	for i := 0; i < count; i++ {
-		in.Yield()
+		ctrl.Yield()
 	}
 }
 
 // Sleep blocks and waits for the given duration.
-func (in *Invoker) Sleep(sleepDuration time.Duration) {
+func (ctrl *Control) Sleep(sleepDuration time.Duration) {
 	// time.Sleep isn't used here to allow immediate cancellation
 	startTime := time.Now()
 	for {
-		in.Yield()
+		ctrl.Yield()
 		elapsed := time.Since(startTime)
 		if elapsed.Microseconds() >= sleepDuration.Microseconds() {
 			break
@@ -99,161 +110,163 @@ func (in *Invoker) Sleep(sleepDuration time.Duration) {
 }
 
 // Repeatedly yields, and stops when *value is false or nil.
-func (in *Invoker) While(value *bool) {
+func (ctrl *Control) YieldWhileVar(value *bool) {
 	for value != nil && *value {
-		in.Yield()
+		ctrl.Yield()
 	}
 }
 
 // Repeatedly yields, and stops when fn returns false.
-func (in *Invoker) WhileFunc(fn func() bool) {
+func (ctrl *Control) YieldWhile(fn func() bool) {
 	for fn() {
-		in.Yield()
+		ctrl.Yield()
 	}
 }
 
 // Repeatedly yields, and stops when *value is true.
 // Similar to While(), but with the condition negated.
-func (in *Invoker) Until(value *bool) {
+func (ctrl *Control) YieldUntilVar(value *bool) {
 	for value == nil || !*value {
-		in.Yield()
+		ctrl.Yield()
 	}
 }
 
 // Repeatedly yields, and stops when fn returns true.
 // Similar to WhileFunc(), but with the condition negated.
-func (in *Invoker) UntilFunc(fn func() bool) {
+func (ctrl *Control) YieldUntil(fn func() bool) {
 	for !fn() {
-		in.Yield()
+		ctrl.Yield()
 	}
 }
 
 // Causes the coroutine to block indefinitely and
 // spiral downwards the endless depths of nothingness, never
 // again to return from the utter blackness of empty void.
-func (in *Invoker) Abyss() {
+func (ctrl *Control) Abyss() {
 	for {
-		in.Yield()
+		ctrl.Yield()
 	}
 }
 
 // Returns true if the coroutine is still running,
 // meaning the coroutine function hasn't returned.
-func (in *Invoker) IsRunning() bool {
-	return bits.IsSet(&in.state, stateRunning)
+func (ctrl *Control) IsRunning() bool {
+	return bits.IsSet(&ctrl.state, stateRunning)
 }
 
 // Returns true it's not IsRunning() and is not
 // flagged for Restart().
-func (in *Invoker) IsDone() bool {
-	return !in.IsRunning() && !in.isRestarting()
+func (ctrl *Control) IsDone() bool {
+	return !ctrl.IsRunning() && !ctrl.isRestarting()
 }
 
 // Cancels the coroutine. Also cancels all child coroutines created with
 // StartAsync. This does not affect parent coroutines.
-// Note: Cancel() won't immediately take effect.
-// Actual cancellation will be done on next Update().
-func (in *Invoker) Cancel() {
-	in.action.Store(actionCancel)
+//
+//	Note: Cancel() won't immediately take effect.
+//	Actual cancellation will be done on next Update().
+func (ctrl *Control) Cancel() {
+	ctrl.action.Store(actionCancel)
 }
 
 // Restarts the coroutine. If the coroutine still running,
 // it is cancelled first.
-// Note: Restart() won't immediately take effect.
-// Actual restart will be done on next Update().
-func (in *Invoker) Restart() {
-	bits.Set(&in.action, actionRestart)
+//
+//	Note: Restart() won't immediately take effect.
+//	Actual restart will be done on next Update().
+func (ctrl *Control) Restart() {
+	bits.Set(&ctrl.action, actionRestart)
 }
 
 // Changes the current coroutine to a new one. If there is
 // a current coroutine running, it is cancelled first.
 // This is conceptually equivalent to transitions in
 // finite state machines.
-func (in *Invoker) Transition(newCoroutine Coroutine) {
-	in.coroutine = newCoroutine
-	in.Cancel()
-	in.Restart()
+func (ctrl *Control) Transition(newCoroutine Coroutine) {
+	ctrl.coroutine = newCoroutine
+	ctrl.Cancel()
+	ctrl.Restart()
 }
 
 // Starts a new child coroutine asynchronously. The child
 // coroutine will be automatically cancelled when the current
 // coroutine ends and is no longer IsRunning().
 // To explicitly wait for the child coroutine to finish, use
-// any preferred synchronization method, or do something
+// any preferred synchronization method, or do somethinIsRunning
 // like
 //
-//	in.UntilFunc(childIn.IsDone)
+//	ctrl.YieldUntil(childIn.IsDone)
 //
 // See also the test functions TestAsync* for a more thorough
 // example.
-func (in *Invoker) StartAsync(coroutine Coroutine) *Invoker {
-	subIn := summonInvoker()
+func (ctrl *Control) StartAsync(coroutine Coroutine) SubControl {
+	subIn := allocCoroutine()
 	subIn.initialize(coroutine)
-	in.subsMu.Lock()
-	in.subs = append(in.subs, subIn)
-	in.subsMu.Unlock()
+	ctrl.subsMu.Lock()
+	ctrl.subControls = append(ctrl.subControls, subIn)
+	ctrl.subsMu.Unlock()
 
 	return subIn
 }
 
 // Use for debugging. Call SetLogging(true) to enable.
-func (in *Invoker) Logf(format string, args ...any) {
-	logFn(in, format, args...)
+func (ctrl *Control) Logf(format string, args ...any) {
+	logFn(ctrl, format, args...)
 }
 
-func (in *Invoker) String() string {
-	return fmt.Sprintf("coroutine-%v", in.ID)
+func (ctrl *Control) String() string {
+	return fmt.Sprintf("coroutine-%v", ctrl.ID)
 }
 
-func (in *Invoker) setRunning(yes bool) {
+func (ctrl *Control) setRunning(yes bool) {
 	if yes {
-		bits.Set(&in.state, stateRunning)
+		bits.Set(&ctrl.state, stateRunning)
 	} else {
-		bits.Unset(&in.state, stateRunning)
+		bits.Unset(&ctrl.state, stateRunning)
 	}
 }
 
-func (in *Invoker) applyRestart() {
-	bits.Unset(&in.state, stateCancel)
-	bits.Unset(&in.action, actionRestart|actionCancel)
+func (ctrl *Control) applyRestart() {
+	bits.Unset(&ctrl.state, stateCancel)
+	bits.Unset(&ctrl.action, actionRestart|actionCancel)
 }
-func (in *Invoker) applyCancel() {
-	bits.Set(&in.state, stateCancel)
-	bits.Unset(&in.action, actionCancel)
+func (ctrl *Control) applyCancel() {
+	bits.Set(&ctrl.state, stateCancel)
+	bits.Unset(&ctrl.action, actionCancel)
 }
 
-func (in *Invoker) isRestarting() bool { return bits.IsSet(&in.action, actionRestart) }
-func (in *Invoker) isCancelling() bool { return bits.IsSet(&in.action, actionCancel) }
+func (ctrl *Control) isRestarting() bool { return bits.IsSet(&ctrl.action, actionRestart) }
+func (ctrl *Control) isCancelling() bool { return bits.IsSet(&ctrl.action, actionCancel) }
 
-func (in *Invoker) loopRunner() {
-	in.setRunning(true)
+func (ctrl *Control) loopRunner() {
+	ctrl.setRunning(true)
 	for {
-		in.Logf("loop start")
-		in.kanata.YieldRight()
+		ctrl.Logf("loop start")
+		ctrl.kanata.YieldRight()
 
-		in.Logf("coroutine start")
-		in.setRunning(true)
-		in.startCoroutine()
+		ctrl.Logf("coroutine start")
+		ctrl.setRunning(true)
+		ctrl.startCoroutine()
 
-		in.waitForSubsToEnd()
+		ctrl.waitForSubsToEnd()
 
-		in.Logf("coroutine end")
-		in.setRunning(false)
+		ctrl.Logf("coroutine end")
+		ctrl.setRunning(false)
 	}
 }
 
-func (in *Invoker) startCoroutine() {
+func (ctrl *Control) startCoroutine() {
 	defer catchCancellation()
-	in.coroutine(in)
+	ctrl.coroutine(ctrl)
 }
 
-func (in *Invoker) waitForSubsToEnd() {
-	bits.Set(&in.state, stateStopping)
-	defer bits.Unset(&in.state, stateStopping)
+func (ctrl *Control) waitForSubsToEnd() {
+	bits.Set(&ctrl.state, stateStopping)
+	defer bits.Unset(&ctrl.state, stateStopping)
 
-	in.subsMu.RLock()
-	subs := in.subs
-	in.subsMu.RUnlock()
+	ctrl.subsMu.RLock()
+	subs := ctrl.subControls
+	ctrl.subsMu.RUnlock()
 
 	for _, s := range subs {
 		s.Cancel()
@@ -270,44 +283,44 @@ func (in *Invoker) waitForSubsToEnd() {
 
 		}
 		if !done {
-			in.kanata.YieldRight()
+			ctrl.kanata.YieldRight()
 		}
 	}
 
-	in.subsMu.Lock()
-	in.subs = in.subs[:0]
-	in.subsMu.Unlock()
+	ctrl.subsMu.Lock()
+	ctrl.subControls = ctrl.subControls[:0]
+	ctrl.subsMu.Unlock()
 
 	for _, s := range subs {
-		disperseInvoker(s)
+		freeCoroutine(s)
 	}
 
 }
 
-func (in *Invoker) update() {
-	restartNow := in.isRestarting()
-	if in.isCancelling() {
-		in.applyCancel()
+func (ctrl *Control) update() {
+	restartNow := ctrl.isRestarting()
+	if ctrl.isCancelling() {
+		ctrl.applyCancel()
 		restartNow = false
 	} else if restartNow {
-		bits.Unset(&in.action, actionRestart)
-		in.applyRestart()
+		bits.Unset(&ctrl.action, actionRestart)
+		ctrl.applyRestart()
 	}
 
-	if in.coroutine != nil && (in.IsRunning() || restartNow) {
-		in.kanata.YieldLeft()
+	if ctrl.coroutine != nil && (ctrl.IsRunning() || restartNow) {
+		ctrl.kanata.YieldLeft()
 	}
 
 	{
 		// update and remove finished subs
-		in.subsMu.RLock()
-		subs := in.subs
-		in.subsMu.RUnlock()
+		ctrl.subsMu.RLock()
+		subs := ctrl.subControls
+		ctrl.subsMu.RUnlock()
 		if len(subs) > 0 {
 			// if it's stopping already, don't bother
 			// filtering out finished subs here, since they will
 			// be removed soon anyway on the loopRunner thread.
-			if bits.IsSet(&in.state, stateStopping) {
+			if bits.IsSet(&ctrl.state, stateStopping) {
 				for _, sub := range subs {
 					sub.update()
 				}
@@ -316,30 +329,30 @@ func (in *Invoker) update() {
 				for _, sub := range subs {
 					sub.update()
 					if sub.IsDone() {
-						disperseInvoker(sub)
+						freeCoroutine(sub)
 						hasRemoved = true
 					} else {
-						in.subsTemp = append(in.subsTemp, sub)
+						ctrl.tempSubControls = append(ctrl.tempSubControls, sub)
 					}
 				}
 				if hasRemoved {
-					in.subsMu.Lock()
-					in.subs = in.subsTemp
-					in.subsMu.Unlock()
+					ctrl.subsMu.Lock()
+					ctrl.subControls = ctrl.tempSubControls
+					ctrl.subsMu.Unlock()
 				}
-				in.subsTemp = in.subsTemp[:0]
+				ctrl.tempSubControls = ctrl.tempSubControls[:0]
 			}
 		}
 	}
 }
 
-func (in *Invoker) initialize(coroutine Coroutine) {
-	in.coroutine = coroutine
-	in.Logf("created")
-	in.Restart()
+func (ctrl *Control) initialize(coroutine Coroutine) {
+	ctrl.coroutine = coroutine
+	ctrl.Logf("created")
+	ctrl.Restart()
 
 }
 
-func (in *Invoker) isCanceled() bool {
-	return bits.IsSet(&in.state, stateCancel)
+func (ctrl *Control) isCanceled() bool {
+	return bits.IsSet(&ctrl.state, stateCancel)
 }
