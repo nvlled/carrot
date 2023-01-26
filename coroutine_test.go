@@ -504,6 +504,53 @@ func TestAsyncNested(t *testing.T) {
 	}
 }
 
+func TestSleep(t *testing.T) {
+	script := carrot.Start(func(in *carrot.Invoker) {
+		in.Sleep(50 * time.Millisecond)
+	})
+
+	now := time.Now()
+	for !script.IsDone() {
+		script.Update()
+	}
+	if time.Since(now).Milliseconds() < 50 {
+		t.Fail()
+	}
+}
+
+func TestChildAsyncRemoval(t *testing.T) {
+	script := carrot.Start(func(in *carrot.Invoker) {
+		for i := 0; i < 100; i++ {
+			in.StartAsync(func(in *carrot.Invoker) {
+				for n := 0; n < 1; n++ {
+					//println(i, "|", n)
+					in.Yield()
+				}
+			})
+			i++
+			in.Yield()
+		}
+	})
+
+	for !script.IsDone() {
+		script.Update()
+	}
+}
+
+func BenchmarkAsync(b *testing.B) {
+	script := carrot.Start(func(in *carrot.Invoker) {
+		for {
+			in.StartAsync(func(in *carrot.Invoker) {})
+			in.Yield()
+		}
+	})
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		script.Update()
+	}
+}
+
 func BenchmarkYield(b *testing.B) {
 	script := carrot.Start(func(in *carrot.Invoker) {
 		for {

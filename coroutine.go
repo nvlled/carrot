@@ -15,9 +15,10 @@ type Coroutine = func(*Invoker)
 type coState = uint32
 
 const (
-	stateUnknown coState = 0b00
-	stateRunning coState = 0b01
-	stateCancel  coState = 0b10
+	stateUnknown  coState = 0b000
+	stateRunning  coState = 0b001
+	stateStopping coState = 0b010
+	stateCancel   coState = 0b100
 )
 
 type coAction = uint32
@@ -51,6 +52,8 @@ type Invoker struct {
 
 	subs   []*Invoker
 	subsMu sync.RWMutex
+
+	subsTemp []*Invoker
 }
 
 var idGen = atomic.Int64{}
@@ -151,7 +154,7 @@ func (in *Invoker) IsDone() bool {
 // Note: Cancel() won't immediately take effect.
 // Actual cancellation will be done on next Update().
 func (in *Invoker) Cancel() {
-	bits.Set(&in.action, actionCancel)
+	in.action.Store(actionCancel)
 }
 
 // Restarts the coroutine. If the coroutine still running,
@@ -168,8 +171,8 @@ func (in *Invoker) Restart() {
 // finite state machines.
 func (in *Invoker) Transition(newCoroutine Coroutine) {
 	in.coroutine = newCoroutine
-	in.Restart()
 	in.Cancel()
+	in.Restart()
 }
 
 // Starts a new child coroutine asynchronously. The child
@@ -245,6 +248,9 @@ func (in *Invoker) startCoroutine() {
 }
 
 func (in *Invoker) waitForSubsToEnd() {
+	bits.Set(&in.state, stateStopping)
+	defer bits.Unset(&in.state, stateStopping)
+
 	in.subsMu.RLock()
 	subs := in.subs
 	in.subsMu.RUnlock()
@@ -292,11 +298,38 @@ func (in *Invoker) update() {
 		in.kanata.YieldLeft()
 	}
 
-	in.subsMu.RLock()
-	subs := in.subs
-	in.subsMu.RUnlock()
-	for _, sub := range subs {
-		sub.update()
+	{
+		// update and remove finished subs
+		in.subsMu.RLock()
+		subs := in.subs
+		in.subsMu.RUnlock()
+		if len(subs) > 0 {
+			// if it's stopping already, don't bother
+			// filtering out finished subs here, since they will
+			// be removed soon anyway on the loopRunner thread.
+			if bits.IsSet(&in.state, stateStopping) {
+				for _, sub := range subs {
+					sub.update()
+				}
+			} else {
+				hasRemoved := false
+				for _, sub := range subs {
+					sub.update()
+					if sub.IsDone() {
+						disperseInvoker(sub)
+						hasRemoved = true
+					} else {
+						in.subsTemp = append(in.subsTemp, sub)
+					}
+				}
+				if hasRemoved {
+					in.subsMu.Lock()
+					in.subs = in.subsTemp
+					in.subsMu.Unlock()
+				}
+				in.subsTemp = in.subsTemp[:0]
+			}
+		}
 	}
 }
 
