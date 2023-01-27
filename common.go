@@ -14,12 +14,12 @@ var ErrCancelled = errors.New("coroutine has been cancelled")
 
 // A type representing none.
 // Used on tasks that doesn't return
-// value: Task[Void]
-type Void struct{}
+// value: Task[void]
+type void struct{}
 
 // That value that represents nothing.
 // Similar to nil, but safer.
-var None = Void{}
+var none = void{}
 
 func catchCancellation() {
 	if err := recover(); err != nil && err != ErrCancelled {

@@ -5,9 +5,9 @@ import (
 	"log"
 )
 
-type LogFn func(in *Control, format string, args ...any)
+type logFunc func(in *Control, format string, args ...any)
 
-var logFn LogFn = logNone
+var logFn logFunc = logNone
 
 func logNone(in *Control, format string, args ...any) {}
 

@@ -31,12 +31,12 @@ package carrot
 // - it's an abstract concept that has no actual analogue
 // - am weebo
 type katana struct {
-	c chan Void
+	c chan void
 }
 
 func newKatana() *katana {
 	return &katana{
-		c: make(chan Void),
+		c: make(chan void),
 	}
 }
 
@@ -44,7 +44,7 @@ func newKatana() *katana {
 // to the coroutine. It will not return
 // until YieldRight() is called.
 func (k *katana) YieldLeft() {
-	k.c <- None
+	k.c <- none
 	<-k.c
 }
 
@@ -53,5 +53,5 @@ func (k *katana) YieldLeft() {
 // until YieldLeft() is called.
 func (k *katana) YieldRight() {
 	<-k.c
-	k.c <- None
+	k.c <- none
 }

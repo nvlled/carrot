@@ -201,8 +201,7 @@ func (ctrl *Control) Transition(newCoroutine Coroutine) {
 // coroutine will be automatically cancelled when the current
 // coroutine ends and is no longer IsRunning().
 // To explicitly wait for the child coroutine to finish, use
-// any preferred synchronization method, or do somethinIsRunning
-// like
+// any preferred synchronization method, or do something like
 //
 //	ctrl.YieldUntil(childIn.IsDone)
 //
