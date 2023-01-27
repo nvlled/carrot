@@ -11,10 +11,10 @@ import (
 
 // An Control is used to direct the program flow of a coroutine.
 //
+//	Note: Methods are all concurrent-safe.
+//
 //	Note: Methods may block for one or more several frames,
 //	except for those labeled with Async.
-//
-//	Note: Methods are all concurrent-safe.
 //
 //	Note: Control methods should be only called within a coroutine
 //	since yield methods will panic with ErrCancelled when cancelled.
@@ -31,14 +31,19 @@ type Control struct {
 
 	coroutine Coroutine
 
-	subsMu sync.RWMutex
+	subControls   []*Control
+	subControlsMu sync.RWMutex
 
-	subControls     []*Control
 	tempSubControls []*Control
 }
 
 // A SubControl is a limited Control
 // that is returned from the StartAsync method.
+//
+//	Note: You can cast SubControl to *Control if you
+//	need to use Yield*() methods from a parent
+//	coroutine, but this can lead to deadlocks or
+//	unexpected behaviour is misused.
 type SubControl interface {
 	Cancel()
 	Restart()
@@ -97,6 +102,10 @@ func (ctrl *Control) Delay(count int) {
 }
 
 // Sleep blocks and waits for the given duration.
+//
+//	Note: Actual sleep duration might be off by several milliseconds,
+//	depending on your update FPS. Minimum sleep duration will be
+//	the frame duration.
 func (ctrl *Control) Sleep(sleepDuration time.Duration) {
 	// time.Sleep isn't used here to allow immediate cancellation
 	startTime := time.Now()
@@ -202,9 +211,9 @@ func (ctrl *Control) Transition(newCoroutine Coroutine) {
 func (ctrl *Control) StartAsync(coroutine Coroutine) SubControl {
 	subIn := allocCoroutine()
 	subIn.initialize(coroutine)
-	ctrl.subsMu.Lock()
+	ctrl.subControlsMu.Lock()
 	ctrl.subControls = append(ctrl.subControls, subIn)
-	ctrl.subsMu.Unlock()
+	ctrl.subControlsMu.Unlock()
 
 	return subIn
 }
@@ -237,6 +246,7 @@ func (ctrl *Control) applyCancel() {
 
 func (ctrl *Control) isRestarting() bool { return bits.IsSet(&ctrl.action, actionRestart) }
 func (ctrl *Control) isCancelling() bool { return bits.IsSet(&ctrl.action, actionCancel) }
+func (ctrl *Control) isCanceled() bool   { return bits.IsSet(&ctrl.state, stateCancel) }
 
 func (ctrl *Control) loopRunner() {
 	ctrl.setRunning(true)
@@ -264,9 +274,9 @@ func (ctrl *Control) waitForSubsToEnd() {
 	bits.Set(&ctrl.state, stateStopping)
 	defer bits.Unset(&ctrl.state, stateStopping)
 
-	ctrl.subsMu.RLock()
+	ctrl.subControlsMu.RLock()
 	subs := ctrl.subControls
-	ctrl.subsMu.RUnlock()
+	ctrl.subControlsMu.RUnlock()
 
 	for _, s := range subs {
 		s.Cancel()
@@ -287,9 +297,9 @@ func (ctrl *Control) waitForSubsToEnd() {
 		}
 	}
 
-	ctrl.subsMu.Lock()
+	ctrl.subControlsMu.Lock()
 	ctrl.subControls = ctrl.subControls[:0]
-	ctrl.subsMu.Unlock()
+	ctrl.subControlsMu.Unlock()
 
 	for _, s := range subs {
 		freeCoroutine(s)
@@ -313,9 +323,9 @@ func (ctrl *Control) update() {
 
 	{
 		// update and remove finished subs
-		ctrl.subsMu.RLock()
+		ctrl.subControlsMu.RLock()
 		subs := ctrl.subControls
-		ctrl.subsMu.RUnlock()
+		ctrl.subControlsMu.RUnlock()
 		if len(subs) > 0 {
 			// if it's stopping already, don't bother
 			// filtering out finished subs here, since they will
@@ -336,9 +346,9 @@ func (ctrl *Control) update() {
 					}
 				}
 				if hasRemoved {
-					ctrl.subsMu.Lock()
+					ctrl.subControlsMu.Lock()
 					ctrl.subControls = ctrl.tempSubControls
-					ctrl.subsMu.Unlock()
+					ctrl.subControlsMu.Unlock()
 				}
 				ctrl.tempSubControls = ctrl.tempSubControls[:0]
 			}
@@ -351,8 +361,4 @@ func (ctrl *Control) initialize(coroutine Coroutine) {
 	ctrl.Logf("created")
 	ctrl.Restart()
 
-}
-
-func (ctrl *Control) isCanceled() bool {
-	return bits.IsSet(&ctrl.state, stateCancel)
 }

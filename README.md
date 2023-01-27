@@ -2,7 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/nvlled/carrot.svg)](https://pkg.go.dev/github.com/nvlled/carrot)
 
-A go "coroutine" library, designed to run inside game loops.
+A go coroutine library, designed to run inside game loops.
 It is library to be primarily used for creating asynchronous state machines.
 
 ## Features
@@ -10,18 +10,20 @@ It is library to be primarily used for creating asynchronous state machines.
 - subjectively simple API
 - arbitrarily compose any coroutines
 - cancelablle and awaitable sub-coroutines
+- concurrent-safe without any further explicit locking,
+  no coroutines will be running at the same time
 
 ## Definitions
 
-`Coroutine` - a function that takes a `Control` argument.
+`Coroutine` - a function that takes a `Control` argument
 
 `Control` - an object used to control the coroutine, with operations
-such yielding or cancelling.
+such yielding or cancelling
 
-`Script` - a root of several related coroutines running.
+`Script` - a group of running related coroutines
 
 `Frame` - equivalent to one call to Update(). Alternatively, it
-is one iteration in the game loop.
+is one iteration in the game loop
 
 ## Installation
 
@@ -93,7 +95,8 @@ For actual usage, see the [example platformer game](#), or the
 
 ## Troubleshooting
 
-- My program froze or hung up
+- **My program froze or hung up**
+
   Check if you have any loops that doesn't have a yield in it.
   Consider the following:
 
@@ -106,6 +109,8 @@ For actual usage, see the [example platformer game](#), or the
   }
   ```
 
+  If not, then it might be a bug.
+
 ## Development
 
 If you plan on making changes for yourself, regularly run
@@ -116,4 +121,4 @@ when you least expect it.
 
 ## Prior art
 
-Took some inspiration from https://github.com/wraikny/AwaitableCoroutine.
+Took some inspiration from a C# library [AwaitableCoroutine](https://github.com/wraikny/AwaitableCoroutine). Notable difference is that carrot doesn't use shared global state, and async sub-coroutines can be cancelled without affecting parent coroutines.

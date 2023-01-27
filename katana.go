@@ -2,7 +2,7 @@ package carrot
 
 // katana is used to simulate coroutine behaviour.
 // Consider the following:
-// | main thread            | coroutine
+// | main thread (left)     | coroutine (right)
 // | -----------------------|-------------------
 // | Start()                |
 // | 	                    | loopRunner()
