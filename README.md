@@ -34,7 +34,6 @@ go get github.com/nvlled/carrot
 ## Documentation
 
 API reference can be found [here](https://pkg.go.dev/github.com/nvlled/carrot).
-A working example program can be found [here:TODO](#TODO).
 
 ## Quick example code
 
@@ -90,8 +89,8 @@ script := carrot.Start(func(ctrl carrot.Control) {
 ```
 
 For more examples, see the coroutine test file.
-For actual usage, see the [example platformer game](#), or the
-[screenshot tool](#). **TODO: Fix link**
+For actual usage, see the [example platformer game](https://github.com/nvlled/dinojump), or the
+[screenshot tool](https://github.com/nvlled/screencage).
 
 ## Troubleshooting
 
@@ -121,4 +120,8 @@ when you least expect it.
 
 ## Prior art
 
-Took some inspiration from a C# library [AwaitableCoroutine](https://github.com/wraikny/AwaitableCoroutine). Notable difference is that carrot doesn't use shared global state, and async sub-coroutines can be cancelled without affecting parent coroutines.
+- Took some inspiration from a C# library I have used before: [AwaitableCoroutine](https://github.com/wraikny/AwaitableCoroutine). Notable difference is that carrot doesn't use shared global state, and async sub-coroutines can be cancelled without affecting parent coroutines. Also, I think AwaitableCoroutine has a bit confusing API, something I kept in mind while designing carrot.
+
+- I haven't looked much into it, but it seems [coro](https://github.com/tcard/coro) also uses channels for coroutines.
+  The implementation and API design is different though, and I didn't refer to it while writing carrot, but it roughly had
+  the same idea before I did, so it's worth a mention at least.
